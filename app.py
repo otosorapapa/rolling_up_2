@@ -1195,14 +1195,16 @@ elif page == "比較ビュー":
         ]
     # ---- 操作バー＋グラフ密着カード ----
 
-    band_params = params.get("band_params", {})
+    band_params_initial = params.get("band_params", {})
+    band_params = band_params_initial
+    amount_slider_cfg = None
     max_amount = int(snapshot["year_sum"].max()) if not snapshot.empty else 0
     low0 = int(
-        band_params.get(
+        band_params_initial.get(
             "low_amount", int(snapshot["year_sum"].min()) if not snapshot.empty else 0
         )
     )
-    high0 = int(band_params.get("high_amount", max_amount))
+    high0 = int(band_params_initial.get("high_amount", max_amount))
 
     st.markdown(
         """
@@ -1265,80 +1267,107 @@ elif page == "比較ビュー":
             ].index(params.get("band_mode", "金額指定")),
         )
     with c7:
-        band_params = params.get("band_params", {})
-        if band_mode == "金額指定" and not snapshot.empty:
-            unit_scale, unit_label = choose_amount_slider_unit(max_amount)
-            slider_max = int(
-                math.ceil(max(max_amount, band_params.get("high_amount", high0)) / unit_scale)
-            )
-            slider_max = max(slider_max, 1)
+        if band_mode == "金額指定":
+            if not snapshot.empty:
+                unit_scale, unit_label = choose_amount_slider_unit(max_amount)
+                slider_max = int(
+                    math.ceil(
+                        max(
+                            max_amount,
+                            band_params_initial.get("high_amount", high0),
+                        )
+                        / unit_scale
+                    )
+                )
+                slider_max = max(slider_max, 1)
 
-            default_low = int(round(band_params.get("low_amount", low0) / unit_scale))
-            default_high = int(round(band_params.get("high_amount", high0) / unit_scale))
-            default_low = max(0, min(default_low, slider_max))
-            default_high = max(default_low, min(default_high, slider_max))
+                default_low = int(
+                    round(band_params_initial.get("low_amount", low0) / unit_scale)
+                )
+                default_high = int(
+                    round(band_params_initial.get("high_amount", high0) / unit_scale)
+                )
+                default_low = max(0, min(default_low, slider_max))
+                default_high = max(default_low, min(default_high, slider_max))
 
-            step = nice_slider_step(slider_max)
+                step = nice_slider_step(slider_max)
 
-            low_scaled, high_scaled = st.slider(
-                f"金額レンジ（{unit_label}単位）",
-                min_value=0,
-                max_value=slider_max,
-                value=(default_low, default_high),
-                step=step,
-            )
-
-            low = int(low_scaled * unit_scale)
-            high = int(high_scaled * unit_scale)
-            high = min(high, max_amount)
-            low = min(low, high)
-
-            st.caption(
-                f"選択中: {format_int(low)}円 〜 {format_int(high)}円"
-            )
-
-            band_params = {"low_amount": low, "high_amount": high}
-        elif band_mode == "商品指定(2)" and not snapshot.empty:
-            opts = (
-                snapshot["product_code"].fillna("")
-                + " | "
-                + snapshot["display_name"].fillna("")
-            ).tolist()
-            opts = [o for o in opts if o.strip() != "|"]
-            prod_a = st.selectbox("商品A", opts, index=0)
-            prod_b = st.selectbox("商品B", opts, index=1 if len(opts) > 1 else 0)
-            band_params = {
-                "prod_a": prod_a.split(" | ")[0],
-                "prod_b": prod_b.split(" | ")[0],
-            }
-        elif band_mode == "パーセンタイル" and not snapshot.empty:
-            p_low, p_high = band_params.get("p_low", 0), band_params.get("p_high", 100)
-            p_low, p_high = st.slider("百分位(%)", 0, 100, (int(p_low), int(p_high)))
-            band_params = {"p_low": p_low, "p_high": p_high}
-        elif band_mode == "順位帯" and not snapshot.empty:
-            max_rank = int(snapshot["rank"].max()) if not snapshot.empty else 1
-            r_low, r_high = band_params.get("r_low", 1), band_params.get(
-                "r_high", max_rank
-            )
-            r_low, r_high = st.slider("順位", 1, max_rank, (int(r_low), int(r_high)))
-            band_params = {"r_low": r_low, "r_high": r_high}
+                amount_slider_cfg = dict(
+                    label=f"金額レンジ（{unit_label}単位）",
+                    min_value=0,
+                    max_value=slider_max,
+                    value=(default_low, default_high),
+                    step=step,
+                    unit_scale=unit_scale,
+                    unit_label=unit_label,
+                    max_amount=max_amount,
+                )
+            else:
+                band_params = {"low_amount": low0, "high_amount": high0}
+        elif band_mode == "商品指定(2)":
+            if not snapshot.empty:
+                opts = (
+                    snapshot["product_code"].fillna("")
+                    + " | "
+                    + snapshot["display_name"].fillna("")
+                ).tolist()
+                opts = [o for o in opts if o.strip() != "|"]
+                prod_a = st.selectbox("商品A", opts, index=0)
+                prod_b = st.selectbox("商品B", opts, index=1 if len(opts) > 1 else 0)
+                band_params = {
+                    "prod_a": prod_a.split(" | ")[0],
+                    "prod_b": prod_b.split(" | ")[0],
+                }
+            else:
+                band_params = band_params_initial
+        elif band_mode == "パーセンタイル":
+            if not snapshot.empty:
+                p_low = band_params_initial.get("p_low", 0)
+                p_high = band_params_initial.get("p_high", 100)
+                p_low, p_high = st.slider(
+                    "百分位(%)", 0, 100, (int(p_low), int(p_high))
+                )
+                band_params = {"p_low": p_low, "p_high": p_high}
+            else:
+                band_params = {
+                    "p_low": band_params_initial.get("p_low", 0),
+                    "p_high": band_params_initial.get("p_high", 100),
+                }
+        elif band_mode == "順位帯":
+            if not snapshot.empty:
+                max_rank = int(snapshot["rank"].max()) if not snapshot.empty else 1
+                r_low = band_params_initial.get("r_low", 1)
+                r_high = band_params_initial.get("r_high", max_rank)
+                r_low, r_high = st.slider(
+                    "順位", 1, max_rank, (int(r_low), int(r_high))
+                )
+                band_params = {"r_low": r_low, "r_high": r_high}
+            else:
+                band_params = {
+                    "r_low": band_params_initial.get("r_low", 1),
+                    "r_high": band_params_initial.get("r_high", 1),
+                }
         else:
             opts = (
                 snapshot["product_code"] + " | " + snapshot["display_name"]
             ).tolist()
             tlabel = st.selectbox("基準商品", opts, index=0) if opts else ""
             tcode = tlabel.split(" | ")[0] if tlabel else ""
-            by = st.radio("幅指定", ["金額", "%"], horizontal=True)
+            by_default = band_params_initial.get("by", "amt")
+            by_index = 0 if by_default == "amt" else 1
+            by = st.radio("幅指定", ["金額", "%"], horizontal=True, index=by_index)
             if by == "金額":
                 width_default = 100000
-                width = int_input("幅", int(band_params.get("width", width_default)))
+                width = int_input(
+                    "幅", int(band_params_initial.get("width", width_default))
+                )
                 band_params = {"target_code": tcode, "by": "amt", "width": int(width)}
             else:
                 width_default = 0.1
                 width = st.number_input(
                     "幅",
-                    value=float(band_params.get("width", width_default)),
-                    step=width_default / 10,
+                    value=float(band_params_initial.get("width", width_default)),
+                    step=width_default / 10 if width_default else 0.01,
                 )
                 band_params = {"target_code": tcode, "by": "pct", "width": width}
     with c8:
@@ -1392,6 +1421,24 @@ elif page == "比較ビュー":
             horizontal=True,
         )
     st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="chart-body">', unsafe_allow_html=True)
+    if amount_slider_cfg:
+        low_scaled, high_scaled = st.slider(
+            amount_slider_cfg["label"],
+            min_value=amount_slider_cfg["min_value"],
+            max_value=amount_slider_cfg["max_value"],
+            value=amount_slider_cfg["value"],
+            step=amount_slider_cfg["step"],
+        )
+        low = int(low_scaled * amount_slider_cfg["unit_scale"])
+        high = int(high_scaled * amount_slider_cfg["unit_scale"])
+        high = min(high, amount_slider_cfg["max_amount"])
+        low = min(low, high)
+        st.caption(f"選択中: {format_int(low)}円 〜 {format_int(high)}円")
+        band_params = {"low_amount": low, "high_amount": high}
+    elif band_mode == "金額指定":
+        band_params = {"low_amount": low0, "high_amount": high0}
 
     params = {
         "end_month": end_m,
@@ -1522,8 +1569,6 @@ elif page == "比較ビュー":
         forecast_robust=False,
         anomaly="OFF",
     )
-
-    st.markdown('<div class="chart-body">', unsafe_allow_html=True)
     fig = build_chart_card(
         df_main,
         selected_codes=None,
