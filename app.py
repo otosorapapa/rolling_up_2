@@ -49,6 +49,11 @@ PLOTLY_CONFIG = {
     "toImageButtonOptions": {"format": "png", "filename": "年計比較"},
 }
 
+APP_TITLE = "売上年計（12カ月移動累計）ダッシュボード"
+st.set_page_config(
+    page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded"
+)
+
 
 @st.cache_data(ttl=600)
 def _ai_sum_df(df: pd.DataFrame) -> str:
@@ -101,17 +106,13 @@ from services import (
     detect_linear_anomalies,
 )
 from core.chart_card import toolbar_sku_detail, build_chart_card
-from core.plot_utils import apply_elegant_theme
-
-APP_TITLE = "売上年計（12カ月移動累計）ダッシュボード"
-st.set_page_config(
-    page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded"
-)
+from core.plot_utils import apply_elegant_theme, render_plotly_with_spinner
 
 # McKinsey inspired light theme
 st.markdown(
     """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=swap');
 :root{
   --bg:#f3f6fb;
   --panel:#ffffff;
@@ -121,40 +122,194 @@ st.markdown(
   --accent-soft:#3a7ebf;
   --muted:#4b5c6c;
   --border:#c6d4e6;
+  --font-base:'Noto Sans JP','Hiragino Kaku Gothic ProN','Meiryo',sans-serif;
 }
-body, .stApp, [data-testid="stAppViewContainer"]{ background:var(--bg) !important; color:var(--text) !important; }
-[data-testid="stSidebar"]{ background:linear-gradient(180deg,#0b2f4c 0%,#0f3b68 100%); color:#f6fbff; padding-top:1rem; }
-[data-testid="stSidebar"] *{ color:#f6fbff !important; }
-[data-testid="stSidebar"] .stButton>button{ background:rgba(255,255,255,0.16); border:1px solid rgba(255,255,255,0.36); color:#ffffff; box-shadow:none; }
-h1,h2,h3{ color:var(--accent-strong); font-weight:800; letter-spacing:.4px; }
-p,li,span{ color:var(--text); }
-[data-testid="stMetric"]{ background:var(--panel); border:1px solid var(--border); border-radius:12px; padding:0.75rem 0.9rem; box-shadow:0 6px 18px rgba(15,60,105,0.12); }
-[data-testid="stMetricValue"]{ color:var(--accent-strong); font-variant-numeric:tabular-nums; font-weight:700; }
-[data-testid="stMetricLabel"]{ color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.08em; }
-.mck-sidebar-summary{ background:rgba(255,255,255,0.12); border-radius:12px; padding:0.85rem; margin-bottom:1.2rem; font-size:0.88rem; line-height:1.5; color:#f6fbff; }
+body, .stApp, [data-testid="stAppViewContainer"]{
+  background:var(--bg) !important;
+  color:var(--text) !important;
+  font-family:var(--font-base);
+  font-size:16px;
+}
+[data-testid="stSidebar"]{
+  background:linear-gradient(180deg,#0b2f4c 0%,#0f3b68 100%);
+  color:#f6fbff;
+  padding-top:1rem;
+  font-family:var(--font-base);
+}
+[data-testid="stSidebar"] *{
+  color:#f6fbff !important;
+  font-family:var(--font-base);
+}
+[data-testid="stSidebar"] .stButton>button{
+  background:rgba(255,255,255,0.16);
+  border:1px solid rgba(255,255,255,0.36);
+  color:#ffffff;
+  box-shadow:none;
+}
+h1,h2,h3{
+  color:var(--accent-strong);
+  font-weight:800;
+  letter-spacing:.4px;
+  font-family:var(--font-base);
+}
+h1{ font-size:2.25rem; }
+h2{ font-size:1.6rem; }
+h3{ font-size:1.28rem; }
+p,li,span{
+  color:var(--text);
+  font-size:1.02rem;
+  line-height:1.7;
+  font-family:var(--font-base);
+}
+small, .text-small{ font-size:0.88rem; }
+[data-testid="stMetric"]{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:12px;
+  padding:0.75rem 0.9rem;
+  box-shadow:0 6px 18px rgba(15,60,105,0.12);
+}
+[data-testid="stMetricValue"]{
+  color:var(--accent-strong);
+  font-variant-numeric:tabular-nums;
+  font-weight:700;
+}
+[data-testid="stMetricLabel"]{
+  color:var(--muted);
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.mck-sidebar-summary{
+  background:rgba(255,255,255,0.12);
+  border-radius:12px;
+  padding:0.85rem;
+  margin-bottom:1.2rem;
+  font-size:0.9rem;
+  line-height:1.6;
+  color:#f6fbff;
+}
 .mck-sidebar-summary strong{ color:#ffffff; }
-.mck-hero{ background:linear-gradient(135deg, rgba(15,60,105,0.95) 0%, rgba(47,111,142,0.86) 100%); color:#ffffff; padding:1.8rem 2rem; border-radius:18px; margin-bottom:1.2rem; box-shadow:0 18px 38px rgba(11,44,74,0.28); position:relative; overflow:hidden; }
-.mck-hero::after{ content:""; position:absolute; inset:auto -18% -32% auto; width:220px; height:220px; background:rgba(255,255,255,0.16); border-radius:50%; }
-.mck-hero h1{ color:#ffffff; margin-bottom:0.5rem; font-size:1.9rem; }
-.mck-hero p{ color:rgba(235,242,250,0.88); font-size:1rem; margin-bottom:0; }
-.mck-hero__eyebrow{ text-transform:uppercase; letter-spacing:.16em; font-size:0.75rem; font-weight:600; color:rgba(235,242,250,0.88); margin-bottom:0.6rem; display:inline-flex; align-items:center; gap:0.5rem; }
+.mck-hero{
+  background:linear-gradient(135deg, rgba(15,60,105,0.95) 0%, rgba(47,111,142,0.86) 100%);
+  color:#ffffff;
+  padding:1.8rem 2rem;
+  border-radius:18px;
+  margin-bottom:1.2rem;
+  box-shadow:0 18px 38px rgba(11,44,74,0.28);
+  position:relative;
+  overflow:hidden;
+  font-family:var(--font-base);
+}
+.mck-hero::after{
+  content:"";
+  position:absolute;
+  inset:auto -18% -32% auto;
+  width:220px;
+  height:220px;
+  background:rgba(255,255,255,0.16);
+  border-radius:50%;
+}
+.mck-hero h1{
+  color:#ffffff;
+  margin-bottom:0.5rem;
+  font-size:2rem;
+}
+.mck-hero p{
+  color:rgba(235,242,250,0.88);
+  font-size:1.02rem;
+  margin-bottom:0;
+}
+.mck-hero__eyebrow{
+  text-transform:uppercase;
+  letter-spacing:.16em;
+  font-size:0.78rem;
+  font-weight:600;
+  color:rgba(235,242,250,0.88);
+  margin-bottom:0.6rem;
+  display:inline-flex;
+  align-items:center;
+  gap:0.5rem;
+}
 .mck-hero__eyebrow:before{ content:"◦"; font-size:0.9rem; }
-.mck-section-header{ display:flex; align-items:flex-start; gap:0.85rem; margin:0.8rem 0 0.6rem; }
-.mck-section-header h2{ margin:0; font-size:1.35rem; line-height:1.2; color:var(--accent-strong); }
-.mck-section-subtitle{ margin:0.25rem 0 0; font-size:0.92rem; color:var(--muted); }
-.mck-section-icon{ width:42px; height:42px; display:inline-flex; align-items:center; justify-content:center; border-radius:50%;background:rgba(15,60,105,0.12); color:var(--accent-strong); font-size:1.2rem; flex-shrink:0; margin-top:0.1rem; }
-.mck-ai-answer{ background:var(--panel); border-radius:12px; border:1px solid var(--border); padding:0.75rem 0.9rem; box-shadow:0 12px 26px rgba(11,44,74,0.12); margin-top:0.75rem; }
+.mck-section-header{
+  display:flex;
+  align-items:flex-start;
+  gap:0.85rem;
+  margin:0.8rem 0 0.6rem;
+}
+.mck-section-header h2{
+  margin:0;
+  font-size:1.4rem;
+  line-height:1.2;
+  color:var(--accent-strong);
+}
+.mck-section-subtitle{
+  margin:0.25rem 0 0;
+  font-size:0.96rem;
+  color:var(--muted);
+}
+.mck-section-icon{
+  width:42px;
+  height:42px;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:50%;
+  background:rgba(15,60,105,0.12);
+  color:var(--accent-strong);
+  font-size:1.2rem;
+  flex-shrink:0;
+  margin-top:0.1rem;
+}
+.mck-ai-answer{
+  background:var(--panel);
+  border-radius:12px;
+  border:1px solid var(--border);
+  padding:0.75rem 0.9rem;
+  box-shadow:0 12px 26px rgba(11,44,74,0.12);
+  margin-top:0.75rem;
+}
 .mck-ai-answer strong{ color:var(--accent-strong); }
 .stTabs [data-baseweb="tab-list"]{ gap:0.6rem; }
-.stTabs [data-baseweb="tab"]{ background:var(--panel); padding:0.6rem 1rem; border-radius:999px; border:1px solid var(--border); color:var(--muted); font-weight:600; }
+.stTabs [data-baseweb="tab"]{
+  background:var(--panel);
+  padding:0.6rem 1rem;
+  border-radius:999px;
+  border:1px solid var(--border);
+  color:var(--muted);
+  font-weight:600;
+}
 .stTabs [data-baseweb="tab"]:hover{ border-color:var(--accent); color:var(--accent-strong); }
 .stTabs [data-baseweb="tab"]:focus{ outline:none; box-shadow:0 0 0 3px rgba(15,76,129,0.2); }
 .stTabs [aria-selected="true"]{ background:var(--accent); color:#ffffff; border-color:var(--accent); }
 .stDataFrame{ border-radius:14px !important; }
-.stButton>button{ border-radius:999px; padding:0.45rem 1.2rem; font-weight:700; border:1px solid var(--accent-strong); color:#ffffff; background:var(--accent); box-shadow:0 10px 24px rgba(15,76,129,0.28); transition:background .2s ease, box-shadow .2s ease; }
-.stButton>button:hover{ background:var(--accent-strong); border-color:var(--accent-strong); color:#ffffff; box-shadow:0 12px 28px rgba(10,46,92,0.32); }
-.chart-card{ background:var(--panel); border:1px solid var(--border); border-radius:14px; box-shadow:0 12px 26px rgba(11,44,74,0.08); }
-.chart-toolbar{ background:linear-gradient(180deg, rgba(15,60,105,0.05), rgba(15,60,105,0.02)); border-bottom:1px solid rgba(15,60,105,0.18); }
+.stButton>button{
+  border-radius:999px;
+  padding:0.45rem 1.2rem;
+  font-weight:700;
+  border:1px solid var(--accent-strong);
+  color:#ffffff;
+  background:var(--accent);
+  box-shadow:0 10px 24px rgba(15,76,129,0.28);
+  transition:background .2s ease, box-shadow .2s ease;
+}
+.stButton>button:hover{
+  background:var(--accent-strong);
+  border-color:var(--accent-strong);
+  color:#ffffff;
+  box-shadow:0 12px 28px rgba(10,46,92,0.32);
+}
+.chart-card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  box-shadow:0 12px 26px rgba(11,44,74,0.08);
+}
+.chart-toolbar{
+  background:linear-gradient(180deg, rgba(15,60,105,0.05), rgba(15,60,105,0.02));
+  border-bottom:1px solid rgba(15,60,105,0.18);
+}
 </style>
     """,
     unsafe_allow_html=True,
@@ -753,10 +908,11 @@ if page == "データ取込":
 
     if file is not None:
         try:
-            if file.name.lower().endswith(".csv"):
-                df_raw = pd.read_csv(file)
-            else:
-                df_raw = pd.read_excel(file, engine="openpyxl")
+            with st.spinner("ファイルを読み込んでいます…"):
+                if file.name.lower().endswith(".csv"):
+                    df_raw = pd.read_csv(file)
+                else:
+                    df_raw = pd.read_excel(file, engine="openpyxl")
         except Exception as e:
             st.error(f"読込エラー: {e}")
             st.stop()
@@ -773,24 +929,28 @@ if page == "データ取込":
 
         if st.button("変換＆取込", type="primary"):
             try:
-                long_df = parse_uploaded_table(
-                    df_raw, product_name_col=product_name_col, product_code_col=code_col
-                )
-                long_df = fill_missing_months(
-                    long_df, policy=st.session_state.settings["missing_policy"]
-                )
-                # Compute year rolling & slopes
-                year_df = compute_year_rolling(
-                    long_df,
-                    window=st.session_state.settings["window"],
-                    policy=st.session_state.settings["missing_policy"],
-                )
-                year_df = compute_slopes(
-                    year_df, last_n=st.session_state.settings["last_n"]
-                )
+                with st.spinner("年計データを計算中…"):
+                    long_df = parse_uploaded_table(
+                        df_raw,
+                        product_name_col=product_name_col,
+                        product_code_col=code_col,
+                    )
+                    long_df = fill_missing_months(
+                        long_df, policy=st.session_state.settings["missing_policy"]
+                    )
+                    # Compute year rolling & slopes
+                    year_df = compute_year_rolling(
+                        long_df,
+                        window=st.session_state.settings["window"],
+                        policy=st.session_state.settings["missing_policy"],
+                    )
+                    year_df = compute_slopes(
+                        year_df, last_n=st.session_state.settings["last_n"]
+                    )
 
-                st.session_state.data_monthly = long_df
-                st.session_state.data_year = year_df
+                    st.session_state.data_monthly = long_df
+                    st.session_state.data_year = year_df
+
                 st.success(
                     "取込完了。ダッシュボードへ移動して可視化を確認してください。"
                 )
@@ -889,29 +1049,30 @@ elif page == "ダッシュボード":
             help="要約・コメント・自動説明を表示（オンデマンド計算）",
             key="dash_ai_summary",
         )
-        if ai_on:
-            with st.spinner("AI要約を生成中…"):
-                kpi_text = _ai_explain(
-                    {
-                        "年計総額": kpi["total_year_sum"],
-                        "年計YoY": kpi["yoy"],
-                        "前月差Δ": kpi["delta"],
-                    }
-                )
-                snap_ai = snap[["year_sum", "yoy", "delta"]].head(100)
-                stat_text = _ai_sum_df(snap_ai)
-                st.info(f"**AI説明**：{kpi_text}\n\n**AI要約**：{stat_text}")
-                actions = _ai_actions(
-                    {
-                        "total_year_sum": float(kpi.get("total_year_sum") or 0.0),
-                        "yoy": float(kpi.get("yoy") or 0.0),
-                        "delta": float(kpi.get("delta") or 0.0),
-                        "hhi": float(hhi or 0.0),
-                    },
-                    focus=end_m,
-                )
-                st.success(f"**AI推奨アクション**：{actions}")
-                st.caption(_ai_comment("直近の年計トレンドと上位SKUの動向"))
+        with st.expander("AIサマリー", expanded=ai_on):
+            if ai_on:
+                with st.spinner("AI要約を生成中…"):
+                    kpi_text = _ai_explain(
+                        {
+                            "年計総額": kpi["total_year_sum"],
+                            "年計YoY": kpi["yoy"],
+                            "前月差Δ": kpi["delta"],
+                        }
+                    )
+                    snap_ai = snap[["year_sum", "yoy", "delta"]].head(100)
+                    stat_text = _ai_sum_df(snap_ai)
+                    st.info(f"**AI説明**：{kpi_text}\n\n**AI要約**：{stat_text}")
+                    actions = _ai_actions(
+                        {
+                            "total_year_sum": float(kpi.get("total_year_sum") or 0.0),
+                            "yoy": float(kpi.get("yoy") or 0.0),
+                            "delta": float(kpi.get("delta") or 0.0),
+                            "hhi": float(hhi or 0.0),
+                        },
+                        focus=end_m,
+                    )
+                    st.success(f"**AI推奨アクション**：{actions}")
+                    st.caption(_ai_comment("直近の年計トレンドと上位SKUの動向"))
 
         fig = px.line(
             totals, x="month", y="year_sum_disp", title="総合 年計トレンド", markers=True
@@ -919,7 +1080,7 @@ elif page == "ダッシュボード":
         fig.update_yaxes(title=f"年計({unit})", tickformat="~,d")
         fig.update_layout(height=525, margin=dict(l=10, r=10, t=50, b=10))
         fig = apply_elegant_theme(fig, theme=st.session_state.get("ui_theme", "dark"))
-        st.plotly_chart(fig, use_container_width=True, config=PLOTLY_CONFIG)
+        render_plotly_with_spinner(fig, config=PLOTLY_CONFIG)
         st.caption("凡例クリックで系列の表示切替、ダブルクリックで単独表示。")
 
     with tab_ranking:
@@ -989,11 +1150,12 @@ elif page == "ランキング":
     fig_bar = apply_elegant_theme(
         fig_bar, theme=st.session_state.get("ui_theme", "dark")
     )
-    st.plotly_chart(fig_bar, use_container_width=True, config=PLOTLY_CONFIG)
+    render_plotly_with_spinner(fig_bar, config=PLOTLY_CONFIG)
 
-    if ai_on and not snap.empty:
-        st.info(_ai_sum_df(snap[["year_sum", "yoy", "delta"]].head(200)))
-        st.caption(_ai_comment("上位と下位の入替やYoYの極端値に注意"))
+    with st.expander("AIサマリー", expanded=ai_on):
+        if ai_on and not snap.empty:
+            st.info(_ai_sum_df(snap[["year_sum", "yoy", "delta"]].head(200)))
+            st.caption(_ai_comment("上位と下位の入替やYoYの極端値に注意"))
 
     st.dataframe(
         snap[
@@ -1320,24 +1482,26 @@ elif page == "比較ビュー":
         value=False,
         help="要約・コメント・自動説明を表示（オンデマンド計算）",
     )
-    if ai_on and not df_main.empty:
-        pos = len(codes_steep)
-        mtn = len(codes_mtn & set(main_codes))
-        val = len(codes_val & set(main_codes))
-        explain = _ai_explain(
-            {
-                "対象SKU数": len(main_codes),
-                "中央値(年計)": float(
-                    snapshot_disp.loc[
-                        snapshot_disp["product_code"].isin(main_codes), "year_sum_disp"
-                    ].median()
-                ),
-                "急勾配数": pos,
-                "山数": mtn,
-                "谷数": val,
-            }
-        )
-        st.info(f"**AI比較コメント**：{explain}")
+    with st.expander("AIサマリー", expanded=ai_on):
+        if ai_on and not df_main.empty:
+            pos = len(codes_steep)
+            mtn = len(codes_mtn & set(main_codes))
+            val = len(codes_val & set(main_codes))
+            explain = _ai_explain(
+                {
+                    "対象SKU数": len(main_codes),
+                    "中央値(年計)": float(
+                        snapshot_disp.loc[
+                            snapshot_disp["product_code"].isin(main_codes),
+                            "year_sum_disp",
+                        ].median()
+                    ),
+                    "急勾配数": pos,
+                    "山数": mtn,
+                    "谷数": val,
+                }
+            )
+            st.info(f"**AI比較コメント**：{explain}")
 
     tb_common = dict(
         period=period,
@@ -1409,7 +1573,7 @@ zスコア：全SKUの傾き分布に対する標準化。|z|≥1.5で急勾配�
         hist_fig = apply_elegant_theme(
             hist_fig, theme=st.session_state.get("ui_theme", "dark")
         )
-        st.plotly_chart(hist_fig, use_container_width=True)
+        render_plotly_with_spinner(hist_fig, config=PLOTLY_CONFIG)
 
     # ---- Small Multiples ----
     df_nodes = df_main.iloc[0:0].copy()
@@ -1481,12 +1645,8 @@ zスコア：全SKUの傾き分布に対する標準化。|z|≥1.5で急勾配�
             fig_s = apply_elegant_theme(
                 fig_s, theme=st.session_state.get("ui_theme", "dark")
             )
-            st.plotly_chart(
-                fig_s,
-                use_container_width=True,
-                height=225,
-                config=PLOTLY_CONFIG,
-            )
+            fig_s.update_layout(height=225)
+            render_plotly_with_spinner(fig_s, config=PLOTLY_CONFIG)
 
     # 5) SKU詳細
 elif page == "SKU詳細":
@@ -1542,20 +1702,21 @@ elif page == "SKU詳細":
             )
             c3.metric("Δ", f"{int(rr['delta'])}" if not pd.isna(rr["delta"]) else "—")
 
-        if ai_on and not row.empty:
-            st.info(
-                _ai_explain(
-                    {
-                        "年計": (
-                            float(rr["year_sum"])
-                            if not pd.isna(rr["year_sum"])
-                            else 0.0
-                        ),
-                        "YoY": float(rr["yoy"]) if not pd.isna(rr["yoy"]) else 0.0,
-                        "Δ": float(rr["delta"]) if not pd.isna(rr["delta"]) else 0.0,
-                    }
+        with st.expander("AIサマリー", expanded=ai_on):
+            if ai_on and not row.empty:
+                st.info(
+                    _ai_explain(
+                        {
+                            "年計": (
+                                float(rr["year_sum"])
+                                if not pd.isna(rr["year_sum"])
+                                else 0.0
+                            ),
+                            "YoY": float(rr["yoy"]) if not pd.isna(rr["yoy"]) else 0.0,
+                            "Δ": float(rr["delta"]) if not pd.isna(rr["delta"]) else 0.0,
+                        }
+                    )
                 )
-            )
 
         st.subheader("メモ / タグ")
         note = st.text_area(
@@ -1605,8 +1766,9 @@ elif page == "SKU詳細":
             snap = latest_yearsum_snapshot(df_year, end_m)
             if codes:
                 snap = snap[snap["product_code"].isin(codes)]
-            if ai_on and not snap.empty:
-                st.info(_ai_sum_df(snap[["year_sum", "yoy", "delta"]]))
+            with st.expander("AIサマリー", expanded=ai_on):
+                if ai_on and not snap.empty:
+                    st.info(_ai_sum_df(snap[["year_sum", "yoy", "delta"]]))
             st.dataframe(
                 snap[["product_code", "product_name", "year_sum", "yoy", "delta"]],
                 use_container_width=True,
@@ -1776,9 +1938,15 @@ elif page == "異常検知":
             mime="text/csv",
         )
 
-        if st.toggle("AI異常サマリー", value=False, key="anomaly_ai_toggle") and not view.empty:
-            ai_df = view[["product_name", "month", "score", "year_sum", "yoy", "delta"]].fillna(0)
-            st.info(_ai_anomaly_report(ai_df))
+        anomaly_ai_on = st.toggle(
+            "AI異常サマリー", value=False, key="anomaly_ai_toggle"
+        )
+        with st.expander("AI異常サマリー", expanded=anomaly_ai_on):
+            if anomaly_ai_on and not view.empty:
+                ai_df = view[
+                    ["product_name", "month", "score", "year_sum", "yoy", "delta"]
+                ].fillna(0)
+                st.info(_ai_anomaly_report(ai_df))
 
         option_labels = [
             f"{row['product_code']}｜{row['product_name'] or row['product_code']}｜{row['month']}"
@@ -1830,8 +1998,10 @@ elif page == "異常検知":
                     f"{name_sel} {month_sel} の年計は {tgt['year_sum_disp']:.0f} {unit}、YoY {yoy_txt}、Δ {delta_txt}。"
                     f" 異常スコアは {tgt['score']:.2f} です。"
                 )
-            fig_anom = apply_elegant_theme(fig_anom, theme=st.session_state.get("ui_theme", "dark"))
-            st.plotly_chart(fig_anom, use_container_width=True, config=PLOTLY_CONFIG)
+            fig_anom = apply_elegant_theme(
+                fig_anom, theme=st.session_state.get("ui_theme", "dark")
+            )
+            render_plotly_with_spinner(fig_anom, config=PLOTLY_CONFIG)
 
 # 6) 相関分析
 elif page == "相関分析":
@@ -1889,16 +2059,17 @@ elif page == "相関分析":
         st.write(f"統計的に有意な相関: {sig_cnt} 組")
         st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
 
-        if ai_on and not tbl.empty:
-            r_mean = float(tbl["r"].abs().mean())
-            st.info(
-                _ai_explain(
-                    {
-                        "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
-                        "平均|r|": r_mean,
-                    }
+        with st.expander("AIサマリー", expanded=ai_on):
+            if ai_on and not tbl.empty:
+                r_mean = float(tbl["r"].abs().mean())
+                st.info(
+                    _ai_explain(
+                        {
+                            "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
+                            "平均|r|": r_mean,
+                        }
+                    )
                 )
-            )
 
         st.subheader("相関ヒートマップ")
         st.caption("右上=強い正、左下=強い負、白=関係薄")
@@ -1909,7 +2080,7 @@ elif page == "相関分析":
         fig_corr = apply_elegant_theme(
             fig_corr, theme=st.session_state.get("ui_theme", "dark")
         )
-        st.plotly_chart(fig_corr, use_container_width=True, config=PLOTLY_CONFIG)
+        render_plotly_with_spinner(fig_corr, config=PLOTLY_CONFIG)
 
         st.subheader("ペア・エクスプローラ")
         c1, c2 = st.columns(2)
@@ -1949,7 +2120,7 @@ elif page == "相関分析":
             fig_sc = apply_elegant_theme(
                 fig_sc, theme=st.session_state.get("ui_theme", "dark")
             )
-            st.plotly_chart(fig_sc, use_container_width=True, config=PLOTLY_CONFIG)
+            render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
             st.caption("rは -1〜+1。0は関連が薄い。CIに0を含まなければ有意。")
             st.caption("散布図の点が右上・左下に伸びれば正、右下・左上なら負。")
     else:
