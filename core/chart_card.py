@@ -13,7 +13,11 @@ from services import (
     band_from_moving_stats,
     detect_linear_anomalies,
 )
-from core.plot_utils import add_latest_labels_no_overlap, apply_elegant_theme
+from core.plot_utils import (
+    add_latest_labels_no_overlap,
+    apply_elegant_theme,
+    render_plotly_with_spinner,
+)
 
 UNIT_SCALE = {"円": 1, "千円": 1_000, "百万円": 1_000_000}
 MAX_DISPLAY_PRODUCTS = 60
@@ -767,7 +771,7 @@ def build_chart_card(
     }
     if config:
         base_config.update(config)
-    st.plotly_chart(
+    render_plotly_with_spinner(
         fig,
         use_container_width=True,
         height=plot_height,

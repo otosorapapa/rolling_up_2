@@ -1,3 +1,5 @@
+from typing import Any
+
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -144,4 +146,26 @@ def add_latest_labels_no_overlap(
             bgcolor="rgba(0,0,0,0)",
             bordercolor="rgba(0,0,0,0)",
             font=dict(size=font_size),
+        )
+
+
+def render_plotly_with_spinner(
+    fig: go.Figure,
+    *,
+    spinner_text: str = "グラフを描画中…",
+    use_container_width: bool = True,
+    config: dict | None = None,
+    **kwargs: Any,
+) -> None:
+    """Render a Plotly figure with a spinner to highlight processing."""
+
+    with st.spinner(spinner_text):
+        height = kwargs.pop("height", None)
+        if height is not None:
+            fig.update_layout(height=height)
+        st.plotly_chart(
+            fig,
+            use_container_width=use_container_width,
+            config=config,
+            **kwargs,
         )
