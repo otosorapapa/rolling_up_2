@@ -99,6 +99,8 @@ from services import (
     resolve_band,
     filter_products_by_band,
     get_yearly_series,
+    sku_correlation_pivot,
+    pairwise_correlation,
     top_growth_codes,
     trend_last6,
     slopes_snapshot,
@@ -2182,15 +2184,6 @@ elif page == "相関分析":
         "std6m",
         "hhi_share",
     ]
-    metrics = st.multiselect(
-        "指標",
-        [m for m in metric_opts if m in snapshot.columns],
-        default=[
-            m
-            for m in ["year_sum", "yoy", "delta", "slope_beta"]
-            if m in snapshot.columns
-        ],
-    )
     method = st.radio(
         "相関の種類",
         ["pearson", "spearman"],
@@ -2207,196 +2200,475 @@ elif page == "相関分析":
         help="要約・コメント・自動説明を表示（オンデマンド計算）",
     )
 
-    if metrics:
-        df_plot = snapshot.copy()
-        df_plot = winsorize_frame(df_plot, metrics, p=winsor_pct / 100)
-        df_plot = maybe_log1p(df_plot, metrics, log_enable)
-        tbl = corr_table(df_plot, metrics, method=method)
-        tbl = tbl[abs(tbl["r"]) >= r_thr]
+    tab_metrics, tab_sku = st.tabs(["指標間の相関", "SKU間の相関"])
 
-        st.subheader("相関の要点")
-        for line in narrate_top_insights(tbl, NAME_MAP):
-            st.write("・", line)
-        sig_cnt = int((tbl["sig"] == "有意(95%)").sum())
-        weak_cnt = int((tbl["r"].abs() < 0.2).sum())
-        st.write(f"統計的に有意な相関: {sig_cnt} 組")
-        st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
+    with tab_metrics:
+        metrics = st.multiselect(
+            "指標",
+            [m for m in metric_opts if m in snapshot.columns],
+            default=[
+                m
+                for m in ["year_sum", "yoy", "delta", "slope_beta"]
+                if m in snapshot.columns
+            ],
+        )
 
-        with st.expander("AIサマリー", expanded=ai_on):
-            if ai_on and not tbl.empty:
-                r_mean = float(tbl["r"].abs().mean())
-                st.info(
-                    _ai_explain(
-                        {
-                            "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
-                            "平均|r|": r_mean,
-                        }
+        if metrics:
+            df_plot = snapshot.copy()
+            df_plot = winsorize_frame(df_plot, metrics, p=winsor_pct / 100)
+            df_plot = maybe_log1p(df_plot, metrics, log_enable)
+            tbl = corr_table(df_plot, metrics, method=method)
+            tbl = tbl[abs(tbl["r"]) >= r_thr]
+
+            st.subheader("相関の要点")
+            for line in narrate_top_insights(tbl, NAME_MAP):
+                st.write("・", line)
+            sig_cnt = int((tbl["sig"] == "有意(95%)").sum())
+            weak_cnt = int((tbl["r"].abs() < 0.2).sum())
+            st.write(f"統計的に有意な相関: {sig_cnt} 組")
+            st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
+
+            with st.expander("AIサマリー", expanded=ai_on):
+                if ai_on and not tbl.empty:
+                    r_mean = float(tbl["r"].abs().mean())
+                    st.info(
+                        _ai_explain(
+                            {
+                                "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
+                                "平均|r|": r_mean,
+                            }
+                        )
                     )
+
+            st.subheader("相関ヒートマップ")
+            st.caption("右上=強い正、左下=強い負、白=関係薄")
+            corr = df_plot[metrics].corr(method=method)
+            fig_corr = px.imshow(
+                corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1, text_auto=True
+            )
+            fig_corr = apply_elegant_theme(
+                fig_corr, theme=st.session_state.get("ui_theme", "dark")
+            )
+            render_plotly_with_spinner(fig_corr, config=PLOTLY_CONFIG)
+
+            st.subheader("ペア・エクスプローラ")
+            c1, c2 = st.columns(2)
+            with c1:
+                x_col = st.selectbox("指標X", metrics, index=0)
+            with c2:
+                y_col = st.selectbox("指標Y", metrics, index=1 if len(metrics) > 1 else 0)
+            df_xy = df_plot[[x_col, y_col, "product_name", "product_code"]].dropna()
+            if not df_xy.empty:
+                m, b, r2 = fit_line(df_xy[x_col], df_xy[y_col])
+                r = df_xy[x_col].corr(df_xy[y_col], method=method)
+                lo, hi = fisher_ci(r, len(df_xy))
+                fig_sc = px.scatter(
+                    df_xy, x=x_col, y=y_col, hover_data=["product_code", "product_name"]
                 )
-
-        st.subheader("相関ヒートマップ")
-        st.caption("右上=強い正、左下=強い負、白=関係薄")
-        corr = df_plot[metrics].corr(method=method)
-        fig_corr = px.imshow(
-            corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1, text_auto=True
-        )
-        fig_corr = apply_elegant_theme(
-            fig_corr, theme=st.session_state.get("ui_theme", "dark")
-        )
-        render_plotly_with_spinner(fig_corr, config=PLOTLY_CONFIG)
-
-        st.subheader("ペア・エクスプローラ")
-        c1, c2 = st.columns(2)
-        with c1:
-            x_col = st.selectbox("指標X", metrics, index=0)
-        with c2:
-            y_col = st.selectbox("指標Y", metrics, index=1 if len(metrics) > 1 else 0)
-        df_xy = df_plot[[x_col, y_col, "product_name", "product_code"]].dropna()
-        if not df_xy.empty:
-            m, b, r2 = fit_line(df_xy[x_col], df_xy[y_col])
-            r = df_xy[x_col].corr(df_xy[y_col], method=method)
-            lo, hi = fisher_ci(r, len(df_xy))
-            fig_sc = px.scatter(
-                df_xy, x=x_col, y=y_col, hover_data=["product_code", "product_name"]
-            )
-            xs = np.linspace(df_xy[x_col].min(), df_xy[x_col].max(), 100)
-            fig_sc.add_trace(go.Scatter(x=xs, y=m * xs + b, mode="lines", name="回帰"))
-            fig_sc.add_annotation(
-                x=0.99,
-                y=0.01,
-                xref="paper",
-                yref="paper",
-                xanchor="right",
-                yanchor="bottom",
-                text=f"r={r:.2f} (95%CI [{lo:.2f},{hi:.2f}])<br>R²={r2:.2f}",
-                showarrow=False,
-                align="right",
-                bgcolor="rgba(255,255,255,0.6)",
-            )
-            resid = np.abs(df_xy[y_col] - (m * df_xy[x_col] + b))
-            outliers = df_xy.loc[resid.nlargest(3).index]
-            for _, row in outliers.iterrows():
-                label = row["product_name"] or row["product_code"]
+                xs = np.linspace(df_xy[x_col].min(), df_xy[x_col].max(), 100)
+                fig_sc.add_trace(go.Scatter(x=xs, y=m * xs + b, mode="lines", name="回帰"))
                 fig_sc.add_annotation(
-                    x=row[x_col], y=row[y_col], text=label, showarrow=True, arrowhead=1
+                    x=0.99,
+                    y=0.01,
+                    xref="paper",
+                    yref="paper",
+                    xanchor="right",
+                    yanchor="bottom",
+                    text=f"r={r:.2f} (95%CI [{lo:.2f},{hi:.2f}])<br>R²={r2:.2f}",
+                    showarrow=False,
+                    align="right",
+                    bgcolor="rgba(255,255,255,0.6)",
                 )
-            fig_sc = apply_elegant_theme(
-                fig_sc, theme=st.session_state.get("ui_theme", "dark")
-            )
-            render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
-            st.caption("rは -1〜+1。0は関連が薄い。CIに0を含まなければ有意。")
-            st.caption("散布図の点が右上・左下に伸びれば正、右下・左上なら負。")
-    else:
-        st.info("指標を選択してください。")
-
-    with st.expander("相関の読み方"):
-        st.write("正の相関：片方が大きいほどもう片方も大きい")
-        st.write("負の相関：片方が大きいほどもう片方は小さい")
-        st.write(
-            "|r|<0.2は弱い、0.2-0.5はややあり、0.5-0.8は中~強、>0.8は非常に強い（目安）"
-        )
-
-# 6) アラート
-elif page == "アラート":
-    require_data()
-    section_header("アラート", "閾値に該当したリスクSKUを自動抽出。", icon="⚠️")
-    end_m = sidebar_state.get("alert_end_month") or latest_month
-    s = st.session_state.settings
-    alerts = build_alerts(
-        st.session_state.data_year,
-        end_month=end_m,
-        yoy_threshold=s["yoy_threshold"],
-        delta_threshold=s["delta_threshold"],
-        slope_threshold=s["slope_threshold"],
-    )
-    if alerts.empty:
-        st.success("閾値に該当するアラートはありません。")
-    else:
-        st.dataframe(alerts, use_container_width=True)
-        st.download_button(
-            "CSVダウンロード",
-            data=alerts.to_csv(index=False).encode("utf-8-sig"),
-            file_name=f"alerts_{end_m}.csv",
-            mime="text/csv",
-        )
-
-# 6) 設定
-elif page == "設定":
-    section_header("設定", "年計計算条件や閾値を調整します。", icon="⚙️")
-    s = st.session_state.settings
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        s["window"] = st.number_input(
-            "年計ウィンドウ（月）",
-            min_value=3,
-            max_value=24,
-            value=int(s["window"]),
-            step=1,
-        )
-        s["last_n"] = st.number_input(
-            "傾き算出の対象点数",
-            min_value=3,
-            max_value=36,
-            value=int(s["last_n"]),
-            step=1,
-        )
-    with c2:
-        s["yoy_threshold"] = st.number_input(
-            "YoY 閾値（<=）", value=float(s["yoy_threshold"]), step=0.01, format="%.2f"
-        )
-        s["delta_threshold"] = int_input("Δ 閾値（<= 円）", int(s["delta_threshold"]))
-    with c3:
-        s["slope_threshold"] = st.number_input(
-            "傾き 閾値（<=）",
-            value=float(s["slope_threshold"]),
-            step=0.1,
-            format="%.2f",
-        )
-        s["currency_unit"] = st.selectbox(
-            "通貨単位表記",
-            options=["円", "千円", "百万円"],
-            index=["円", "千円", "百万円"].index(s["currency_unit"]),
-        )
-
-    st.caption("※ 設定変更後は再計算が必要です。")
-    if st.button("年計の再計算を実行", type="primary"):
-        if st.session_state.data_monthly is None:
-            st.warning("先にデータを取り込んでください。")
+                resid = np.abs(df_xy[y_col] - (m * df_xy[x_col] + b))
+                outliers = df_xy.loc[resid.nlargest(3).index]
+                for _, row in outliers.iterrows():
+                    label = row["product_name"] or row["product_code"]
+                    fig_sc.add_annotation(
+                        x=row[x_col], y=row[y_col], text=label, showarrow=True, arrowhead=1
+                    )
+                fig_sc = apply_elegant_theme(
+                    fig_sc, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
+                st.caption("rは -1〜+1。0は関連が薄い。CIに0を含まなければ有意。")
+                st.caption("散布図の点が右上・左下に伸びれば正、右下・左上なら負。")
         else:
-            long_df = st.session_state.data_monthly
-            year_df = compute_year_rolling(
-                long_df, window=s["window"], policy=s["missing_policy"]
+            st.info("指標を選択してください。")
+
+    with tab_sku:
+        st.subheader("SKU間の相関（時系列）")
+        product_df = (
+            st.session_state.data_year[["product_code", "product_name"]]
+            .drop_duplicates()
+            .sort_values("product_name")
+        )
+        name_map = {
+            row.product_code: row.product_name
+            for row in product_df.itertuples()
+        }
+
+        def sku_label(code: str) -> str:
+            name = name_map.get(code)
+            if isinstance(name, str) and name:
+                return f"{name}（{code}）"
+            return code
+
+        available_codes = product_df["product_code"].tolist()
+        default_codes = snapshot.head(6)["product_code"].tolist()
+        if not default_codes:
+            default_codes = available_codes[:6]
+
+        sku_sel = st.multiselect(
+            "対象SKU",
+            options=available_codes,
+            default=default_codes,
+            format_func=sku_label,
+            help="相関を見たいSKUを選択。多すぎるとヒートマップが読みにくくなります。",
+        )
+
+        month_list = sorted(st.session_state.data_year["month"].unique())
+        if month_list:
+            start_idx = max(0, len(month_list) - 12)
+            period_default = (month_list[start_idx], month_list[-1])
+            period_start, period_end = st.select_slider(
+                "分析期間",
+                options=month_list,
+                value=period_default,
             )
-            year_df = compute_slopes(year_df, last_n=s["last_n"])
-            st.session_state.data_year = year_df
-            st.success("再計算が完了しました。")
-
-# 7) 保存ビュー
-elif page == "保存ビュー":
-    section_header("保存ビュー", "設定や比較条件をブックマーク。", icon="🔖")
-    s = st.session_state.settings
-    cparams = st.session_state.compare_params
-    st.write("現在の設定・選択（閾値、ウィンドウ、単位など）を名前を付けて保存します。")
-
-    name = st.text_input("ビュー名")
-    if st.button("保存"):
-        if not name:
-            st.warning("ビュー名を入力してください。")
         else:
-            st.session_state.saved_views[name] = {
-                "settings": dict(s),
-                "compare": dict(cparams),
-            }
-            st.success(f"ビュー「{name}」を保存しました。")
+            period_start = period_end = None
 
-    st.subheader("保存済みビュー")
-    if not st.session_state.saved_views:
-        st.info("保存済みビューはありません。")
-    else:
-        for k, v in st.session_state.saved_views.items():
-            st.write(f"**{k}**: {json.dumps(v, ensure_ascii=False)}")
-            if st.button(f"適用: {k}"):
-                st.session_state.settings.update(v.get("settings", {}))
-                st.session_state.compare_params = v.get("compare", {})
-                st.session_state.compare_results = None
-                st.success(f"ビュー「{k}」を適用しました。")
+        series_metric_candidates = [
+            "year_sum",
+            "delta",
+            "yoy",
+            "slope_beta",
+            "slope6m",
+            "std6m",
+        ]
+        series_metrics = [
+            m for m in series_metric_candidates if m in st.session_state.data_year.columns
+        ]
+        if not series_metrics:
+            st.warning("対象となる指標が見つかりません。")
+        else:
+            metric_idx = 0
+            if "year_sum" in series_metrics:
+                metric_idx = series_metrics.index("year_sum")
+            sku_metric = st.selectbox(
+                "対象指標",
+                options=series_metrics,
+                index=metric_idx,
+                format_func=lambda m: NAME_MAP.get(m, m),
+            )
+
+            if len(sku_sel) < 2:
+                st.info("2つ以上のSKUを選択してください。")
+            else:
+                pivot = sku_correlation_pivot(
+                    st.session_state.data_year,
+                    codes=sku_sel,
+                    start=period_start,
+                    end=period_end,
+                    metric=sku_metric,
+                )
+                selected_cols = [code for code in sku_sel if code in pivot.columns]
+                pivot = pivot[selected_cols]
+                pivot = pivot.dropna(how="all")
+
+                if pivot.empty or len(selected_cols) < 2:
+                    st.info("選択した条件では十分なデータがありません。")
+                else:
+                    pivot_proc = winsorize_frame(pivot, pivot.columns, p=winsor_pct / 100)
+                    pivot_proc = maybe_log1p(pivot_proc, pivot.columns, log_enable)
+                    pairs_full = pairwise_correlation(pivot_proc, method=method)
+
+                    if pairs_full.empty:
+                        st.info("相関を計算できるSKUペアがありません。")
+                    else:
+                        ci_values = pairs_full.apply(
+                            lambda row: fisher_ci(row["r"], row["n"]), axis=1
+                        ).tolist()
+                        pairs_full["ci_low"] = [ci[0] for ci in ci_values]
+                        pairs_full["ci_high"] = [ci[1] for ci in ci_values]
+                        pairs_full["sig"] = [
+                            "有意(95%)"
+                            if not (np.isnan(lo) or np.isnan(hi)) and (lo > 0 or hi < 0)
+                            else "n.s."
+                            for lo, hi in zip(pairs_full["ci_low"], pairs_full["ci_high"])
+                        ]
+                        pairs_filtered = pairs_full[abs(pairs_full["r"]) >= r_thr]
+
+                        display_map = {code: sku_label(code) for code in selected_cols}
+
+                        st.subheader("主なSKU相関")
+                        for line in narrate_top_insights(pairs_filtered, display_map):
+                            st.write("・", line)
+                        sig_cnt = int((pairs_filtered["sig"] == "有意(95%)").sum())
+                        weak_cnt = int((pairs_filtered["r"].abs() < 0.2).sum())
+                        st.write(f"統計的に有意な相関: {sig_cnt} 組")
+                        st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
+                        if period_start and period_end:
+                            min_n = int(pairs_full["n"].min())
+                            max_n = int(pairs_full["n"].max())
+                            st.caption(
+                                f"対象期間: {period_start}〜{period_end} ｜ 対象SKU: {len(selected_cols)} 件 ｜ サンプル月数: {min_n}〜{max_n}"
+                            )
+
+                        target_tbl = pairs_filtered if not pairs_filtered.empty else pairs_full
+                        with st.expander("AIサマリー", expanded=ai_on):
+                            if ai_on and not target_tbl.empty:
+                                r_mean = float(target_tbl["r"].abs().mean())
+                                st.info(
+                                    _ai_explain(
+                                        {
+                                            "有意本数": int((target_tbl["sig"] == "有意(95%)").sum()),
+                                            "平均|r|": r_mean,
+                                        }
+                                    )
+                                )
+
+                        table_view = (
+                            pairs_filtered if not pairs_filtered.empty else pairs_full
+                        ).copy()
+                        if table_view.empty:
+                            st.info("閾値を満たす相関はありません。")
+                        else:
+                            table_view["SKU A"] = table_view["code_a"].map(display_map)
+                            table_view["SKU B"] = table_view["code_b"].map(display_map)
+                            table_view["相関係数"] = table_view["r"].round(3)
+                            table_view["サンプル数"] = table_view["n"]
+                            table_view["95%下限"] = table_view["ci_low"].round(3)
+                            table_view["95%上限"] = table_view["ci_high"].round(3)
+                            table_view = table_view[
+                                [
+                                    "SKU A",
+                                    "SKU B",
+                                    "相関係数",
+                                    "サンプル数",
+                                    "95%下限",
+                                    "95%上限",
+                                    "sig",
+                                ]
+                            ].rename(columns={"sig": "有意判定"})
+                            st.dataframe(table_view, use_container_width=True, hide_index=True)
+
+                        corr_mat = pivot_proc.corr(method=method)
+                        if not corr_mat.empty:
+                            corr_mat = corr_mat.loc[selected_cols, selected_cols]
+                            corr_mat.index = [display_map.get(c, c) for c in corr_mat.index]
+                            corr_mat.columns = [display_map.get(c, c) for c in corr_mat.columns]
+                            fig_corr_sku = px.imshow(
+                                corr_mat,
+                                color_continuous_scale="RdBu_r",
+                                zmin=-1,
+                                zmax=1,
+                                text_auto=True,
+                            )
+                            fig_corr_sku = apply_elegant_theme(
+                                fig_corr_sku, theme=st.session_state.get("ui_theme", "dark")
+                            )
+                            render_plotly_with_spinner(fig_corr_sku, config=PLOTLY_CONFIG)
+
+                        if not pairs_full.empty:
+                            st.subheader("SKUペア・エクスプローラ")
+                            pair_labels = {
+                                row.pair: f"{display_map.get(row.code_a, row.code_a)} × {display_map.get(row.code_b, row.code_b)} (r={row.r:.2f}, n={row.n})"
+                                for row in pairs_full.itertuples()
+                            }
+                            pair_options = list(pair_labels.keys())
+                            default_pair = (
+                                pairs_filtered.iloc[0]["pair"]
+                                if not pairs_filtered.empty
+                                else pair_options[0]
+                            )
+                            pair_idx = pair_options.index(default_pair)
+                            selected_pair = st.selectbox(
+                                "詳細を確認するペア",
+                                options=pair_options,
+                                index=pair_idx,
+                                format_func=lambda p: pair_labels[p],
+                            )
+                            code_a, code_b = selected_pair.split("×")
+                            pair_df = pivot_proc[[code_a, code_b]].dropna()
+                            if len(pair_df) >= 2:
+                                pair_df_reset = pair_df.reset_index().rename(
+                                    columns={"index": "month"}
+                                )
+                                m, b, r2 = fit_line(pair_df[code_a], pair_df[code_b])
+                                r_pair = pair_df[code_a].corr(pair_df[code_b], method=method)
+                                lo_pair, hi_pair = fisher_ci(r_pair, len(pair_df))
+                                fig_sc = px.scatter(
+                                    pair_df_reset,
+                                    x=code_a,
+                                    y=code_b,
+                                    hover_name="month",
+                                    labels={
+                                        code_a: display_map.get(code_a, code_a),
+                                        code_b: display_map.get(code_b, code_b),
+                                    },
+                                )
+                                xs = np.linspace(
+                                    pair_df[code_a].min(), pair_df[code_a].max(), 100
+                                )
+                                fig_sc.add_trace(
+                                    go.Scatter(x=xs, y=m * xs + b, mode="lines", name="回帰")
+                                )
+                                fig_sc.add_annotation(
+                                    x=0.99,
+                                    y=0.01,
+                                    xref="paper",
+                                    yref="paper",
+                                    xanchor="right",
+                                    yanchor="bottom",
+                                    text=f"r={r_pair:.2f} (95%CI [{lo_pair:.2f},{hi_pair:.2f}])<br>R²={r2:.2f}",
+                                    showarrow=False,
+                                    align="right",
+                                    bgcolor="rgba(255,255,255,0.6)",
+                                )
+                                fig_sc = apply_elegant_theme(
+                                    fig_sc, theme=st.session_state.get("ui_theme", "dark")
+                                )
+                                render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
+                                st.caption("散布図の点は月次年計（変換後）の組み合わせ。")
+
+                                fig_ts = go.Figure()
+                                fig_ts.add_trace(
+                                    go.Scatter(
+                                        x=pair_df_reset["month"],
+                                        y=pair_df_reset[code_a],
+                                        mode="lines+markers",
+                                        name=display_map.get(code_a, code_a),
+                                    )
+                                )
+                                fig_ts.add_trace(
+                                    go.Scatter(
+                                        x=pair_df_reset["month"],
+                                        y=pair_df_reset[code_b],
+                                        mode="lines+markers",
+                                        name=display_map.get(code_b, code_b),
+                                    )
+                                )
+                                fig_ts.update_layout(
+                                    xaxis_title="月",
+                                    yaxis_title=NAME_MAP.get(sku_metric, sku_metric),
+                                )
+                                fig_ts = apply_elegant_theme(
+                                    fig_ts, theme=st.session_state.get("ui_theme", "dark")
+                                )
+                                render_plotly_with_spinner(fig_ts, config=PLOTLY_CONFIG)
+                                st.caption("折れ線は同一期間の推移。外れ値の時期もチェックできます。")
+                            else:
+                                st.info("選択したペアの相関を計算するのに十分なデータがありません。")
+
+        with st.expander("相関の読み方"):
+            st.write("正の相関：片方が大きいほどもう片方も大きい")
+            st.write("負の相関：片方が大きいほどもう片方は小さい")
+            st.write(
+                "|r|<0.2は弱い、0.2-0.5はややあり、0.5-0.8は中~強、>0.8は非常に強い（目安）"
+            )
+
+    # 6) アラート
+    elif page == "アラート":
+        require_data()
+        section_header("アラート", "閾値に該当したリスクSKUを自動抽出。", icon="⚠️")
+        end_m = sidebar_state.get("alert_end_month") or latest_month
+        s = st.session_state.settings
+        alerts = build_alerts(
+            st.session_state.data_year,
+            end_month=end_m,
+            yoy_threshold=s["yoy_threshold"],
+            delta_threshold=s["delta_threshold"],
+            slope_threshold=s["slope_threshold"],
+        )
+        if alerts.empty:
+            st.success("閾値に該当するアラートはありません。")
+        else:
+            st.dataframe(alerts, use_container_width=True)
+            st.download_button(
+                "CSVダウンロード",
+                data=alerts.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"alerts_{end_m}.csv",
+                mime="text/csv",
+            )
+
+    # 6) 設定
+    elif page == "設定":
+        section_header("設定", "年計計算条件や閾値を調整します。", icon="⚙️")
+        s = st.session_state.settings
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            s["window"] = st.number_input(
+                "年計ウィンドウ（月）",
+                min_value=3,
+                max_value=24,
+                value=int(s["window"]),
+                step=1,
+            )
+            s["last_n"] = st.number_input(
+                "傾き算出の対象点数",
+                min_value=3,
+                max_value=36,
+                value=int(s["last_n"]),
+                step=1,
+            )
+        with c2:
+            s["yoy_threshold"] = st.number_input(
+                "YoY 閾値（<=）", value=float(s["yoy_threshold"]), step=0.01, format="%.2f"
+            )
+            s["delta_threshold"] = int_input("Δ 閾値（<= 円）", int(s["delta_threshold"]))
+        with c3:
+            s["slope_threshold"] = st.number_input(
+                "傾き 閾値（<=）",
+                value=float(s["slope_threshold"]),
+                step=0.1,
+                format="%.2f",
+            )
+            s["currency_unit"] = st.selectbox(
+                "通貨単位表記",
+                options=["円", "千円", "百万円"],
+                index=["円", "千円", "百万円"].index(s["currency_unit"]),
+            )
+
+        st.caption("※ 設定変更後は再計算が必要です。")
+        if st.button("年計の再計算を実行", type="primary"):
+            if st.session_state.data_monthly is None:
+                st.warning("先にデータを取り込んでください。")
+            else:
+                long_df = st.session_state.data_monthly
+                year_df = compute_year_rolling(
+                    long_df, window=s["window"], policy=s["missing_policy"]
+                )
+                year_df = compute_slopes(year_df, last_n=s["last_n"])
+                st.session_state.data_year = year_df
+                st.success("再計算が完了しました。")
+
+    # 7) 保存ビュー
+    elif page == "保存ビュー":
+        section_header("保存ビュー", "設定や比較条件をブックマーク。", icon="🔖")
+        s = st.session_state.settings
+        cparams = st.session_state.compare_params
+        st.write("現在の設定・選択（閾値、ウィンドウ、単位など）を名前を付けて保存します。")
+
+        name = st.text_input("ビュー名")
+        if st.button("保存"):
+            if not name:
+                st.warning("ビュー名を入力してください。")
+            else:
+                st.session_state.saved_views[name] = {
+                    "settings": dict(s),
+                    "compare": dict(cparams),
+                }
+                st.success(f"ビュー「{name}」を保存しました。")
+
+        st.subheader("保存済みビュー")
+        if not st.session_state.saved_views:
+            st.info("保存済みビューはありません。")
+        else:
+            for k, v in st.session_state.saved_views.items():
+                st.write(f"**{k}**: {json.dumps(v, ensure_ascii=False)}")
+                if st.button(f"適用: {k}"):
+                    st.session_state.settings.update(v.get("settings", {}))
+                    st.session_state.compare_params = v.get("compare", {})
+                    st.session_state.compare_results = None
+                    st.success(f"ビュー「{k}」を適用しました。")
