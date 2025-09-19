@@ -107,6 +107,14 @@ from services import (
 )
 from core.chart_card import toolbar_sku_detail, build_chart_card
 from core.plot_utils import apply_elegant_theme, render_plotly_with_spinner
+from core.correlation import (
+    corr_table,
+    fisher_ci,
+    fit_line,
+    maybe_log1p,
+    narrate_top_insights,
+    winsorize_frame,
+)
 
 # McKinsey inspired light theme
 st.markdown(
@@ -728,92 +736,6 @@ def build_copilot_context(
 def marker_step(dates, target_points=24):
     n = len(pd.unique(dates))
     return max(1, round(n / target_points))
-
-
-# ---- Correlation Helpers & Label Overlap Avoidance ----
-
-
-def fisher_ci(r: float, n: int, zcrit: float = 1.96):
-    r = np.clip(r, -0.999999, 0.999999)
-    if n <= 3:
-        return np.nan, np.nan
-    z = np.arctanh(r)
-    se = 1 / np.sqrt(n - 3)
-    lo, hi = np.tanh(z - zcrit * se), np.tanh(z + zcrit * se)
-    return float(lo), float(hi)
-
-
-def corr_table(df: pd.DataFrame, cols, method: str = "pearson"):
-    sub = df[cols].dropna()
-    n = len(sub)
-    c = sub.corr(method=method)
-    rows = []
-    for i, a in enumerate(cols):
-        for b in cols[i + 1 :]:
-            r = c.loc[a, b]
-            lo, hi = fisher_ci(r, n)
-            sig = "有意(95%)" if (lo > 0 or hi < 0) else "n.s."
-            rows.append(
-                {
-                    "pair": f"{a}×{b}",
-                    "r": r,
-                    "n": n,
-                    "ci_low": lo,
-                    "ci_high": hi,
-                    "sig": sig,
-                }
-            )
-    return pd.DataFrame(rows).sort_values("r", ascending=False)
-
-
-def winsorize_frame(df, cols, p: float = 0.01):
-    out = df.copy()
-    for col in cols:
-        x = out[col]
-        lo, hi = x.quantile(p), x.quantile(1 - p)
-        out[col] = x.clip(lo, hi)
-    return out
-
-
-def maybe_log1p(df, cols, enable: bool):
-    if not enable:
-        return df
-    out = df.copy()
-    for col in cols:
-        if (out[col] >= 0).all():
-            out[col] = np.log1p(out[col])
-    return out
-
-
-def narrate_top_insights(tbl: pd.DataFrame, name_map: dict, k: int = 3):
-    pos = tbl[tbl["r"] > 0].nlargest(k, "r")
-    neg = tbl[tbl["r"] < 0].nsmallest(k, "r")
-    lines = []
-
-    def jp(pair):
-        a, b = pair.split("×")
-        return f"「{name_map.get(a, a)}」と「{name_map.get(b, b)}」"
-
-    for _, r in pos.iterrows():
-        lines.append(
-            f"{jp(r['pair'])} は **正の相関** (r={r['r']:.2f}, 95%CI [{r['ci_low']:.2f},{r['ci_high']:.2f}], n={r['n']})。"
-        )
-    for _, r in neg.iterrows():
-        lines.append(
-            f"{jp(r['pair'])} は **負の相関** (r={r['r']:.2f}, 95%CI [{r['ci_low']:.2f},{r['ci_high']:.2f}], n={r['n']})。"
-        )
-    return lines
-
-
-def fit_line(x, y):
-    x = x.values.astype(float)
-    y = y.values.astype(float)
-    m, b = np.polyfit(x, y, 1)
-    yhat = m * x + b
-    ss_res = np.sum((y - yhat) ** 2)
-    ss_tot = np.sum((y - y.mean()) ** 2)
-    r2 = 1 - ss_res / ss_tot if ss_tot > 0 else np.nan
-    return m, b, r2
 
 
 NAME_MAP = {
@@ -2182,14 +2104,10 @@ elif page == "相関分析":
         "std6m",
         "hhi_share",
     ]
-    metrics = st.multiselect(
-        "指標",
-        [m for m in metric_opts if m in snapshot.columns],
-        default=[
-            m
-            for m in ["year_sum", "yoy", "delta", "slope_beta"]
-            if m in snapshot.columns
-        ],
+    analysis_mode = st.radio(
+        "分析対象",
+        ["指標間", "SKU間"],
+        horizontal=True,
     )
     method = st.radio(
         "相関の種類",
@@ -2197,97 +2115,373 @@ elif page == "相関分析":
         horizontal=True,
         format_func=lambda x: "Pearson" if x == "pearson" else "Spearman",
     )
-    winsor_pct = st.slider("外れ値丸め(%)", 0.0, 5.0, 1.0)
-    log_enable = st.checkbox("ログ変換", value=False)
     r_thr = st.slider("相関 r 閾値（|r|≥）", 0.0, 1.0, 0.0, 0.05)
 
-    ai_on = st.toggle(
-        "AIサマリー",
-        value=False,
-        help="要約・コメント・自動説明を表示（オンデマンド計算）",
-    )
+    if analysis_mode == "指標間":
+        metrics = st.multiselect(
+            "指標",
+            [m for m in metric_opts if m in snapshot.columns],
+            default=[
+                m
+                for m in ["year_sum", "yoy", "delta", "slope_beta"]
+                if m in snapshot.columns
+            ],
+        )
+        winsor_pct = st.slider("外れ値丸め(%)", 0.0, 5.0, 1.0)
+        log_enable = st.checkbox("ログ変換", value=False)
+        ai_on = st.toggle(
+            "AIサマリー",
+            value=False,
+            key="corr_ai_metric",
+            help="要約・コメント・自動説明を表示（オンデマンド計算）",
+        )
 
-    if metrics:
-        df_plot = snapshot.copy()
-        df_plot = winsorize_frame(df_plot, metrics, p=winsor_pct / 100)
-        df_plot = maybe_log1p(df_plot, metrics, log_enable)
-        tbl = corr_table(df_plot, metrics, method=method)
-        tbl = tbl[abs(tbl["r"]) >= r_thr]
+        if metrics:
+            df_plot = snapshot.copy()
+            df_plot = winsorize_frame(df_plot, metrics, p=winsor_pct / 100)
+            df_plot = maybe_log1p(df_plot, metrics, log_enable)
+            tbl = corr_table(df_plot, metrics, method=method)
+            tbl = tbl[abs(tbl["r"]) >= r_thr]
 
-        st.subheader("相関の要点")
-        for line in narrate_top_insights(tbl, NAME_MAP):
-            st.write("・", line)
-        sig_cnt = int((tbl["sig"] == "有意(95%)").sum())
-        weak_cnt = int((tbl["r"].abs() < 0.2).sum())
-        st.write(f"統計的に有意な相関: {sig_cnt} 組")
-        st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
+            st.subheader("相関の要点")
+            for line in narrate_top_insights(tbl, NAME_MAP):
+                st.write("・", line)
+            sig_cnt = int((tbl["sig"] == "有意(95%)").sum())
+            weak_cnt = int((tbl["r"].abs() < 0.2).sum())
+            st.write(f"統計的に有意な相関: {sig_cnt} 組")
+            st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
 
-        with st.expander("AIサマリー", expanded=ai_on):
-            if ai_on and not tbl.empty:
-                r_mean = float(tbl["r"].abs().mean())
-                st.info(
-                    _ai_explain(
-                        {
-                            "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
-                            "平均|r|": r_mean,
-                        }
+            with st.expander("AIサマリー", expanded=ai_on):
+                if ai_on and not tbl.empty:
+                    r_mean = float(tbl["r"].abs().mean())
+                    st.info(
+                        _ai_explain(
+                            {
+                                "有意本数": int((tbl["sig"] == "有意(95%)").sum()),
+                                "平均|r|": r_mean,
+                            }
+                        )
                     )
+
+            st.subheader("相関ヒートマップ")
+            st.caption("右上=強い正、左下=強い負、白=関係薄")
+            corr = df_plot[metrics].corr(method=method)
+            fig_corr = px.imshow(
+                corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1, text_auto=True
+            )
+            fig_corr = apply_elegant_theme(
+                fig_corr, theme=st.session_state.get("ui_theme", "dark")
+            )
+            render_plotly_with_spinner(fig_corr, config=PLOTLY_CONFIG)
+
+            st.subheader("ペア・エクスプローラ")
+            c1, c2 = st.columns(2)
+            with c1:
+                x_col = st.selectbox("指標X", metrics, index=0)
+            with c2:
+                y_col = st.selectbox(
+                    "指標Y", metrics, index=1 if len(metrics) > 1 else 0
                 )
-
-        st.subheader("相関ヒートマップ")
-        st.caption("右上=強い正、左下=強い負、白=関係薄")
-        corr = df_plot[metrics].corr(method=method)
-        fig_corr = px.imshow(
-            corr, color_continuous_scale="RdBu_r", zmin=-1, zmax=1, text_auto=True
-        )
-        fig_corr = apply_elegant_theme(
-            fig_corr, theme=st.session_state.get("ui_theme", "dark")
-        )
-        render_plotly_with_spinner(fig_corr, config=PLOTLY_CONFIG)
-
-        st.subheader("ペア・エクスプローラ")
-        c1, c2 = st.columns(2)
-        with c1:
-            x_col = st.selectbox("指標X", metrics, index=0)
-        with c2:
-            y_col = st.selectbox("指標Y", metrics, index=1 if len(metrics) > 1 else 0)
-        df_xy = df_plot[[x_col, y_col, "product_name", "product_code"]].dropna()
-        if not df_xy.empty:
-            m, b, r2 = fit_line(df_xy[x_col], df_xy[y_col])
-            r = df_xy[x_col].corr(df_xy[y_col], method=method)
-            lo, hi = fisher_ci(r, len(df_xy))
-            fig_sc = px.scatter(
-                df_xy, x=x_col, y=y_col, hover_data=["product_code", "product_name"]
-            )
-            xs = np.linspace(df_xy[x_col].min(), df_xy[x_col].max(), 100)
-            fig_sc.add_trace(go.Scatter(x=xs, y=m * xs + b, mode="lines", name="回帰"))
-            fig_sc.add_annotation(
-                x=0.99,
-                y=0.01,
-                xref="paper",
-                yref="paper",
-                xanchor="right",
-                yanchor="bottom",
-                text=f"r={r:.2f} (95%CI [{lo:.2f},{hi:.2f}])<br>R²={r2:.2f}",
-                showarrow=False,
-                align="right",
-                bgcolor="rgba(255,255,255,0.6)",
-            )
-            resid = np.abs(df_xy[y_col] - (m * df_xy[x_col] + b))
-            outliers = df_xy.loc[resid.nlargest(3).index]
-            for _, row in outliers.iterrows():
-                label = row["product_name"] or row["product_code"]
+            df_xy = df_plot[[x_col, y_col, "product_name", "product_code"]].dropna()
+            if not df_xy.empty:
+                m, b, r2 = fit_line(df_xy[x_col], df_xy[y_col])
+                r = df_xy[x_col].corr(df_xy[y_col], method=method)
+                lo, hi = fisher_ci(r, len(df_xy))
+                fig_sc = px.scatter(
+                    df_xy, x=x_col, y=y_col, hover_data=["product_code", "product_name"]
+                )
+                xs = np.linspace(df_xy[x_col].min(), df_xy[x_col].max(), 100)
+                fig_sc.add_trace(
+                    go.Scatter(x=xs, y=m * xs + b, mode="lines", name="回帰")
+                )
                 fig_sc.add_annotation(
-                    x=row[x_col], y=row[y_col], text=label, showarrow=True, arrowhead=1
+                    x=0.99,
+                    y=0.01,
+                    xref="paper",
+                    yref="paper",
+                    xanchor="right",
+                    yanchor="bottom",
+                    text=f"r={r:.2f} (95%CI [{lo:.2f},{hi:.2f}])<br>R²={r2:.2f}",
+                    showarrow=False,
+                    align="right",
+                    bgcolor="rgba(255,255,255,0.6)",
                 )
-            fig_sc = apply_elegant_theme(
-                fig_sc, theme=st.session_state.get("ui_theme", "dark")
-            )
-            render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
-            st.caption("rは -1〜+1。0は関連が薄い。CIに0を含まなければ有意。")
-            st.caption("散布図の点が右上・左下に伸びれば正、右下・左上なら負。")
+                resid = np.abs(df_xy[y_col] - (m * df_xy[x_col] + b))
+                outliers = df_xy.loc[resid.nlargest(3).index]
+                for _, row in outliers.iterrows():
+                    label = row["product_name"] or row["product_code"]
+                    fig_sc.add_annotation(
+                        x=row[x_col],
+                        y=row[y_col],
+                        text=label,
+                        showarrow=True,
+                        arrowhead=1,
+                    )
+                fig_sc = apply_elegant_theme(
+                    fig_sc, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_sc, config=PLOTLY_CONFIG)
+                st.caption("rは -1〜+1。0は関連が薄い。CIに0を含まなければ有意。")
+                st.caption("散布図の点が右上・左下に伸びれば正、右下・左上なら負。")
+        else:
+            st.info("指標を選択してください。")
     else:
-        st.info("指標を選択してください。")
+        df_year = st.session_state.data_year.copy()
+        series_metric_opts = [m for m in metric_opts if m in df_year.columns]
+        if not series_metric_opts:
+            st.info("SKU間相関に利用できる指標がありません。")
+        else:
+            sku_metric = st.selectbox(
+                "対象指標",
+                series_metric_opts,
+                format_func=lambda x: NAME_MAP.get(x, x),
+            )
+            months_all = sorted(df_year["month"].unique())
+            if not months_all:
+                st.info("データが不足しています。")
+            else:
+                if end_m in months_all:
+                    end_idx = months_all.index(end_m)
+                else:
+                    end_idx = len(months_all) - 1
+                if end_idx < 0:
+                    st.info("対象期間のデータがありません。")
+                else:
+                    max_period = end_idx + 1
+                    if max_period < 2:
+                        st.info("対象期間のデータが不足しています。")
+                    else:
+                        slider_min = 2
+                        slider_max = max_period
+                        default_period = max(slider_min, min(12, slider_max))
+                        period = int(
+                            st.slider(
+                                "対象期間（月数）",
+                                min_value=slider_min,
+                                max_value=slider_max,
+                                value=default_period,
+                            )
+                        )
+                        start_idx = max(0, end_idx - period + 1)
+                        months_window = months_all[start_idx : end_idx + 1]
+                        df_window = df_year[df_year["month"].isin(months_window)]
+                        pivot = (
+                            df_window.pivot(
+                                index="month", columns="product_code", values=sku_metric
+                            ).sort_index()
+                        )
+                        pivot = pivot.dropna(how="all")
+                        if pivot.empty:
+                            st.info("選択した期間に利用できるデータがありません。")
+                        else:
+                            top_candidates = [
+                                c for c in snapshot["product_code"] if c in pivot.columns
+                            ]
+                            if len(top_candidates) < 2:
+                                st.info("対象SKUが不足しています。")
+                            else:
+                                top_max = min(60, len(top_candidates))
+                                top_default = max(2, min(10, top_max))
+                                top_n = int(
+                                    st.slider(
+                                        "対象SKU数（上位）",
+                                        min_value=2,
+                                        max_value=top_max,
+                                        value=top_default,
+                                    )
+                                )
+                                selected_codes = top_candidates[:top_n]
+                                sku_pivot = pivot[selected_codes].dropna(
+                                    axis=1, how="all"
+                                )
+                                available_codes = sku_pivot.columns.tolist()
+                                min_periods = 3
+                                valid_codes = [
+                                    code
+                                    for code in available_codes
+                                    if sku_pivot[code].count() >= min_periods
+                                ]
+                                if len(valid_codes) < 2:
+                                    st.info(
+                                        "有効なSKUが2件未満です。期間やSKU数を調整してください。"
+                                    )
+                                else:
+                                    sku_pivot = sku_pivot[valid_codes]
+                                    months_used = sku_pivot.index.tolist()
+                                    code_to_name = (
+                                        df_year[["product_code", "product_name"]]
+                                        .drop_duplicates()
+                                        .set_index("product_code")["product_name"]
+                                        .to_dict()
+                                    )
+                                    display_map = {
+                                        code: f"{code}｜{code_to_name.get(code, code) or code}"
+                                        for code in valid_codes
+                                    }
+                                    ai_on = st.toggle(
+                                        "AIサマリー",
+                                        value=False,
+                                        key="corr_ai_sku",
+                                        help="要約・コメント・自動説明を表示（オンデマンド計算）",
+                                    )
+                                    tbl_raw = corr_table(
+                                        sku_pivot,
+                                        valid_codes,
+                                        method=method,
+                                        pairwise=True,
+                                        min_periods=min_periods,
+                                    )
+                                    tbl = tbl_raw.dropna(subset=["r"])
+                                    tbl = tbl[abs(tbl["r"]) >= r_thr]
+
+                                    st.subheader("相関の要点")
+                                    if months_used:
+                                        st.caption(
+                                            f"対象期間: {months_used[0]}〜{months_used[-1]}（{len(months_used)}ヶ月）"
+                                        )
+                                    st.caption(
+                                        "対象SKU: "
+                                        + "、".join(display_map[code] for code in valid_codes)
+                                    )
+                                    for line in narrate_top_insights(tbl, display_map):
+                                        st.write("・", line)
+                                    sig_cnt = int((tbl["sig"] == "有意(95%)").sum())
+                                    weak_cnt = int((tbl["r"].abs() < 0.2).sum())
+                                    st.write(f"統計的に有意な相関: {sig_cnt} 組")
+                                    st.write(f"|r|<0.2 の組み合わせ: {weak_cnt} 組")
+                                    if tbl.empty:
+                                        st.info(
+                                            "条件に合致するSKU間相関は見つかりませんでした。"
+                                        )
+
+                                    with st.expander("AIサマリー", expanded=ai_on):
+                                        if ai_on and not tbl.empty:
+                                            r_mean = float(tbl["r"].abs().mean())
+                                            st.info(
+                                                _ai_explain(
+                                                    {
+                                                        "有意本数": int(
+                                                            (tbl["sig"] == "有意(95%)").sum()
+                                                        ),
+                                                        "平均|r|": r_mean,
+                                                    }
+                                                )
+                                            )
+
+                                    st.subheader("相関ヒートマップ")
+                                    st.caption(
+                                        "セルは対象期間におけるSKU同士の相関係数を示します。"
+                                    )
+                                    heatmap = sku_pivot.rename(columns=display_map)
+                                    corr = heatmap.corr(
+                                        method=method, min_periods=min_periods
+                                    )
+                                    fig_corr = px.imshow(
+                                        corr,
+                                        color_continuous_scale="RdBu_r",
+                                        zmin=-1,
+                                        zmax=1,
+                                        text_auto=True,
+                                    )
+                                    fig_corr = apply_elegant_theme(
+                                        fig_corr, theme=st.session_state.get("ui_theme", "dark")
+                                    )
+                                    render_plotly_with_spinner(
+                                        fig_corr, config=PLOTLY_CONFIG
+                                    )
+
+                                    st.subheader("SKUペア・エクスプローラ")
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        x_code = st.selectbox(
+                                            "SKU X",
+                                            valid_codes,
+                                            format_func=lambda c: display_map.get(c, c),
+                                        )
+                                    with c2:
+                                        y_default = 1 if len(valid_codes) > 1 else 0
+                                        y_code = st.selectbox(
+                                            "SKU Y",
+                                            valid_codes,
+                                            index=y_default,
+                                            format_func=lambda c: display_map.get(c, c),
+                                        )
+                                    df_xy = (
+                                        sku_pivot[[x_code, y_code]]
+                                        .dropna()
+                                        .reset_index()
+                                    )
+                                    if len(df_xy) >= 2:
+                                        x_label = display_map.get(x_code, x_code)
+                                        y_label = display_map.get(y_code, y_code)
+                                        df_xy = df_xy.rename(
+                                            columns={
+                                                "month": "月",
+                                                x_code: x_label,
+                                                y_code: y_label,
+                                            }
+                                        )
+                                        m, b, r2 = fit_line(
+                                            df_xy[x_label], df_xy[y_label]
+                                        )
+                                        r = df_xy[x_label].corr(
+                                            df_xy[y_label], method=method
+                                        )
+                                        lo, hi = fisher_ci(r, len(df_xy))
+                                        fig_sc = px.scatter(
+                                            df_xy,
+                                            x=x_label,
+                                            y=y_label,
+                                            hover_data=["月"],
+                                        )
+                                        xs = np.linspace(
+                                            df_xy[x_label].min(), df_xy[x_label].max(), 100
+                                        )
+                                        fig_sc.add_trace(
+                                            go.Scatter(
+                                                x=xs, y=m * xs + b, mode="lines", name="回帰"
+                                            )
+                                        )
+                                        fig_sc.add_annotation(
+                                            x=0.99,
+                                            y=0.01,
+                                            xref="paper",
+                                            yref="paper",
+                                            xanchor="right",
+                                            yanchor="bottom",
+                                            text=f"r={r:.2f} (95%CI [{lo:.2f},{hi:.2f}])<br>R²={r2:.2f}｜n={len(df_xy)}",
+                                            showarrow=False,
+                                            align="right",
+                                            bgcolor="rgba(255,255,255,0.6)",
+                                        )
+                                        resid = np.abs(
+                                            df_xy[y_label] - (m * df_xy[x_label] + b)
+                                        )
+                                        outliers = df_xy.loc[
+                                            resid.nlargest(min(3, len(resid))).index
+                                        ]
+                                        for _, row in outliers.iterrows():
+                                            fig_sc.add_annotation(
+                                                x=row[x_label],
+                                                y=row[y_label],
+                                                text=row["月"],
+                                                showarrow=True,
+                                                arrowhead=1,
+                                            )
+                                        fig_sc = apply_elegant_theme(
+                                            fig_sc,
+                                            theme=st.session_state.get("ui_theme", "dark"),
+                                        )
+                                        render_plotly_with_spinner(
+                                            fig_sc, config=PLOTLY_CONFIG
+                                        )
+                                        st.caption(
+                                            "各点は対象期間の月次値。右上（左下）に伸びれば同時に増加（減少）。"
+                                        )
+                                    else:
+                                        st.info(
+                                            "共通する月のデータが不足しています。期間やSKU数を調整してください。"
+                                        )
 
     with st.expander("相関の読み方"):
         st.write("正の相関：片方が大きいほどもう片方も大きい")
