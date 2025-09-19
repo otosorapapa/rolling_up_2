@@ -115,6 +115,7 @@ from core.correlation import (
     narrate_top_insights,
     winsorize_frame,
 )
+from core.product_clusters import render_correlation_category_module
 
 # McKinsey inspired light theme
 st.markdown(
@@ -767,6 +768,7 @@ SIDEBAR_PAGES = [
     ("🧾 SKU詳細", "SKU詳細"),
     ("⚠️ 異常検知", "異常検知"),
     ("🔗 相関分析", "相関分析"),
+    ("🛍️ 併買カテゴリ", "併買カテゴリ"),
     ("📥 データ取込", "データ取込"),
     ("🚨 アラート", "アラート"),
     ("⚙️ 設定", "設定"),
@@ -2490,7 +2492,11 @@ elif page == "相関分析":
             "|r|<0.2は弱い、0.2-0.5はややあり、0.5-0.8は中~強、>0.8は非常に強い（目安）"
         )
 
-# 6) アラート
+# 7) 併買カテゴリ
+elif page == "併買カテゴリ":
+    render_correlation_category_module(plot_config=PLOTLY_CONFIG)
+
+# 8) アラート
 elif page == "アラート":
     require_data()
     section_header("アラート", "閾値に該当したリスクSKUを自動抽出。", icon="⚠️")
@@ -2514,7 +2520,7 @@ elif page == "アラート":
             mime="text/csv",
         )
 
-# 6) 設定
+# 9) 設定
 elif page == "設定":
     section_header("設定", "年計計算条件や閾値を調整します。", icon="⚙️")
     s = st.session_state.settings
@@ -2565,7 +2571,7 @@ elif page == "設定":
             st.session_state.data_year = year_df
             st.success("再計算が完了しました。")
 
-# 7) 保存ビュー
+# 10) 保存ビュー
 elif page == "保存ビュー":
     section_header("保存ビュー", "設定や比較条件をブックマーク。", icon="🔖")
     s = st.session_state.settings
