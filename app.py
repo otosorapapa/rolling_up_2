@@ -448,9 +448,6 @@ def clip_text(value: str, width: int = 220) -> str:
 # ---------------- Helpers ----------------
 def require_data():
     if st.session_state.data_year is None or st.session_state.data_monthly is None:
-        st.info(
-            "データが未取り込みです。左メニュー「データ取込」からアップロードしてください。"
-        )
         st.stop()
 
 
@@ -458,11 +455,21 @@ def month_options(df: pd.DataFrame) -> List[str]:
     return sorted(df["month"].dropna().unique().tolist())
 
 
-def end_month_selector(df: pd.DataFrame, key="end_month"):
+def end_month_selector(
+    df: pd.DataFrame,
+    key: str = "end_month",
+    label: str = "終端月（年計の計算対象）",
+    sidebar: bool = False,
+):
+    """Month selector that can be rendered either in the main area or sidebar."""
+
     mopts = month_options(df)
-    default = mopts[-1] if mopts else None
-    return st.selectbox(
-        "終端月（年計の計算対象）",
+    widget = st.sidebar if sidebar else st
+    if not mopts:
+        widget.caption("対象となる月がありません。")
+        return None
+    return widget.selectbox(
+        label,
         mopts,
         index=(len(mopts) - 1) if mopts else 0,
         key=key,
@@ -829,22 +836,137 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True,
 )
-page = st.sidebar.radio(
-    "メニュー",
-    [
-        "ダッシュボード",
-        "ランキング",
-        "比較ビュー",
-        "SKU詳細",
-        "異常検知",
-        "相関分析",
-        "データ取込",
-        "アラート",
-        "設定",
-        "保存ビュー",
-    ],
+st.sidebar.title("ナビゲーション")
+
+SIDEBAR_PAGES = [
+    ("🏠 ホーム", "ダッシュボード"),
+    ("📊 ランキング", "ランキング"),
+    ("🔁 比較ビュー", "比較ビュー"),
+    ("🧾 SKU詳細", "SKU詳細"),
+    ("⚠️ 異常検知", "異常検知"),
+    ("🔗 相関分析", "相関分析"),
+    ("📥 データ取込", "データ取込"),
+    ("🚨 アラート", "アラート"),
+    ("⚙️ 設定", "設定"),
+    ("💾 保存ビュー", "保存ビュー"),
+]
+
+page_label = st.sidebar.radio(
+    "利用する機能を選択",
+    [label for label, _ in SIDEBAR_PAGES],
+    index=0,
 )
+page_lookup = dict(SIDEBAR_PAGES)
+page = page_lookup[page_label]
 latest_month = render_sidebar_summary()
+
+sidebar_state: Dict[str, object] = {}
+year_df = st.session_state.get("data_year")
+
+if year_df is not None and not year_df.empty:
+    if page == "ダッシュボード":
+        st.sidebar.subheader("期間選択")
+        period_options = [12, 24, 36]
+        default_period = st.session_state.settings.get("window", 12)
+        if default_period not in period_options:
+            default_period = 12
+        st.sidebar.selectbox(
+            "集計期間",
+            period_options,
+            index=period_options.index(default_period),
+            key="sidebar_period",
+            format_func=lambda v: f"{v}ヶ月",
+            on_change=lambda: log_click("期間選択"),
+        )
+        unit_options = list(UNIT_MAP.keys())
+        default_unit = st.session_state.settings.get("currency_unit", "円")
+        if default_unit not in unit_options:
+            default_unit = unit_options[0]
+        st.sidebar.selectbox(
+            "表示単位",
+            unit_options,
+            index=unit_options.index(default_unit),
+            key="sidebar_unit",
+            on_change=lambda: log_click("表示単位"),
+        )
+        st.sidebar.subheader("表示月")
+        sidebar_state["dashboard_end_month"] = end_month_selector(
+            year_df,
+            key="end_month_dash",
+            label="表示月",
+            sidebar=True,
+        )
+    elif page == "ランキング":
+        st.sidebar.subheader("期間選択")
+        sidebar_state["rank_end_month"] = end_month_selector(
+            year_df,
+            key="end_month_rank",
+            label="ランキング対象月",
+            sidebar=True,
+        )
+        st.sidebar.subheader("評価指標")
+        metric_options = [
+            ("年計（12カ月累計）", "year_sum"),
+            ("前年同月比（YoY）", "yoy"),
+            ("前月差（Δ）", "delta"),
+            ("直近傾き（β）", "slope_beta"),
+        ]
+        selected_metric = st.sidebar.selectbox(
+            "表示指標",
+            metric_options,
+            format_func=lambda opt: opt[0],
+            key="sidebar_rank_metric",
+        )
+        sidebar_state["rank_metric"] = selected_metric[1]
+        order_options = [
+            ("降順 (大きい順)", "desc"),
+            ("昇順 (小さい順)", "asc"),
+        ]
+        selected_order = st.sidebar.selectbox(
+            "並び順",
+            order_options,
+            format_func=lambda opt: opt[0],
+            key="sidebar_rank_order",
+        )
+        sidebar_state["rank_order"] = selected_order[1]
+        sidebar_state["rank_hide_zero"] = st.sidebar.checkbox(
+            "年計ゼロを除外",
+            value=True,
+            key="sidebar_rank_hide_zero",
+        )
+    elif page == "比較ビュー":
+        st.sidebar.subheader("期間選択")
+        sidebar_state["compare_end_month"] = end_month_selector(
+            year_df,
+            key="compare_end_month",
+            label="比較対象月",
+            sidebar=True,
+        )
+    elif page == "SKU詳細":
+        st.sidebar.subheader("期間選択")
+        sidebar_state["detail_end_month"] = end_month_selector(
+            year_df,
+            key="end_month_detail",
+            label="詳細確認月",
+            sidebar=True,
+        )
+    elif page == "相関分析":
+        st.sidebar.subheader("期間選択")
+        sidebar_state["corr_end_month"] = end_month_selector(
+            year_df,
+            key="corr_end_month",
+            label="分析対象月",
+            sidebar=True,
+        )
+    elif page == "アラート":
+        st.sidebar.subheader("期間選択")
+        sidebar_state["alert_end_month"] = end_month_selector(
+            year_df,
+            key="end_month_alert",
+            label="評価対象月",
+            sidebar=True,
+        )
+
 st.sidebar.divider()
 
 with st.sidebar.expander("AIコパイロット", expanded=False):
@@ -879,6 +1001,15 @@ with st.sidebar.expander("AIコパイロット", expanded=False):
 st.sidebar.divider()
 
 render_app_hero()
+
+if (
+    st.session_state.data_year is None
+    or st.session_state.data_monthly is None
+):
+    st.info(
+        "左メニューの「データ取込」からCSVまたはExcelファイルをアップロードしてください。"
+        "サンプルデータを用意すると初見の利用者も迷いません。"
+    )
 
 # ---------------- Pages ----------------
 
@@ -983,39 +1114,24 @@ elif page == "ダッシュボード":
     require_data()
     section_header("ダッシュボード", "年計KPIと成長トレンドを俯瞰します。", icon="📈")
 
-    # Command bar (期間/単位)
-    with st.container():
-        col_p, col_u = st.columns([1, 1])
-        with col_p:
-            st.selectbox(
-                "期間",
-                options=[12, 24, 36],
-                index=[12, 24, 36].index(st.session_state.settings.get("window", 12)),
-                key="cmd_period",
-                on_change=lambda: log_click("期間"),
-            )
-        with col_u:
-            st.selectbox(
-                "単位",
-                options=list(UNIT_MAP.keys()),
-                index=list(UNIT_MAP.keys()).index(
-                    st.session_state.settings.get("currency_unit", "円")
-                ),
-                key="cmd_unit",
-                on_change=lambda: log_click("単位"),
-            )
+    period_value = st.session_state.get(
+        "sidebar_period", st.session_state.settings.get("window", 12)
+    )
+    unit_value = st.session_state.get(
+        "sidebar_unit", st.session_state.settings.get("currency_unit", "円")
+    )
 
     # update settings and filter log
-    st.session_state.settings["window"] = st.session_state.cmd_period
-    st.session_state.settings["currency_unit"] = st.session_state.cmd_unit
+    st.session_state.settings["window"] = period_value
+    st.session_state.settings["currency_unit"] = unit_value
     st.session_state.filters.update(
         {
-            "period": st.session_state.cmd_period,
-            "currency_unit": st.session_state.cmd_unit,
+            "period": period_value,
+            "currency_unit": unit_value,
         }
     )
 
-    end_m = end_month_selector(st.session_state.data_year, key="end_month_dash")
+    end_m = sidebar_state.get("dashboard_end_month") or latest_month
 
     # KPI
     kpi = aggregate_overview(st.session_state.data_year, end_m)
@@ -1122,12 +1238,10 @@ elif page == "ダッシュボード":
 elif page == "ランキング":
     require_data()
     section_header("ランキング", "上位と下位のSKUを瞬時に把握します。", icon="🏆")
-    end_m = end_month_selector(st.session_state.data_year, key="end_month_rank")
-    metric = st.selectbox(
-        "指標", options=["year_sum", "yoy", "delta", "slope_beta"], index=0
-    )
-    order = st.radio("並び順", options=["desc", "asc"], horizontal=True)
-    hide_zero = st.checkbox("年計ゼロを除外", value=True)
+    end_m = sidebar_state.get("rank_end_month") or latest_month
+    metric = sidebar_state.get("rank_metric", "year_sum")
+    order = sidebar_state.get("rank_order", "desc")
+    hide_zero = sidebar_state.get("rank_hide_zero", True)
 
     ai_on = st.toggle(
         "AIサマリー",
@@ -1183,7 +1297,7 @@ elif page == "比較ビュー":
     section_header("マルチ商品比較", "条件を柔軟に切り替えてSKUを重ね合わせます。", icon="🔍")
     params = st.session_state.compare_params
     year_df = st.session_state.data_year
-    end_m = end_month_selector(year_df, key="compare_end_month")
+    end_m = sidebar_state.get("compare_end_month") or latest_month
 
     snapshot = latest_yearsum_snapshot(year_df, end_m)
     snapshot["display_name"] = snapshot["product_name"].fillna(snapshot["product_code"])
@@ -1697,7 +1811,7 @@ zスコア：全SKUの傾き分布に対する標準化。|z|≥1.5で急勾配�
 elif page == "SKU詳細":
     require_data()
     section_header("SKU 詳細", "個別SKUのトレンドとメモを一元管理。", icon="🗂️")
-    end_m = end_month_selector(st.session_state.data_year, key="end_month_detail")
+    end_m = sidebar_state.get("detail_end_month") or latest_month
     prods = (
         st.session_state.data_year[["product_code", "product_name"]]
         .drop_duplicates()
@@ -2052,7 +2166,7 @@ elif page == "異常検知":
 elif page == "相関分析":
     require_data()
     section_header("相関分析", "指標間の関係性からインサイトを発掘。", icon="🧭")
-    end_m = end_month_selector(st.session_state.data_year, key="corr_end_month")
+    end_m = sidebar_state.get("corr_end_month") or latest_month
     snapshot = latest_yearsum_snapshot(st.session_state.data_year, end_m)
 
     metric_opts = [
@@ -2182,7 +2296,7 @@ elif page == "相関分析":
 elif page == "アラート":
     require_data()
     section_header("アラート", "閾値に該当したリスクSKUを自動抽出。", icon="⚠️")
-    end_m = end_month_selector(st.session_state.data_year, key="end_month_alert")
+    end_m = sidebar_state.get("alert_end_month") or latest_month
     s = st.session_state.settings
     alerts = build_alerts(
         st.session_state.data_year,
