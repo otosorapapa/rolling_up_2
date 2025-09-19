@@ -12,6 +12,8 @@ statsmodels
 python-pptx
 scipy
 scikit-learn
+networkx
+python-louvain
 chardet
 ruff
 black
