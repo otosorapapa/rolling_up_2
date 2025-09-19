@@ -1537,6 +1537,8 @@ elif page == "比較ビュー":
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown('<div class="chart-body">', unsafe_allow_html=True)
+    ai_summary_container = st.container()
+
     if amount_slider_cfg:
         low_scaled, high_scaled = st.slider(
             amount_slider_cfg["label"],
@@ -1638,31 +1640,33 @@ elif page == "比較ビュー":
         main_codes = top_order[:max_lines]
 
     df_main = df_long[df_long["product_code"].isin(main_codes)]
-    ai_on = st.toggle(
-        "AIサマリー",
-        value=False,
-        help="要約・コメント・自動説明を表示（オンデマンド計算）",
-    )
-    with st.expander("AIサマリー", expanded=ai_on):
-        if ai_on and not df_main.empty:
-            pos = len(codes_steep)
-            mtn = len(codes_mtn & set(main_codes))
-            val = len(codes_val & set(main_codes))
-            explain = _ai_explain(
-                {
-                    "対象SKU数": len(main_codes),
-                    "中央値(年計)": float(
-                        snapshot_disp.loc[
-                            snapshot_disp["product_code"].isin(main_codes),
-                            "year_sum_disp",
-                        ].median()
-                    ),
-                    "急勾配数": pos,
-                    "山数": mtn,
-                    "谷数": val,
-                }
-            )
-            st.info(f"**AI比較コメント**：{explain}")
+
+    with ai_summary_container:
+        ai_on = st.toggle(
+            "AIサマリー",
+            value=False,
+            help="要約・コメント・自動説明を表示（オンデマンド計算）",
+        )
+        with st.expander("AIサマリー", expanded=ai_on):
+            if ai_on and not df_main.empty:
+                pos = len(codes_steep)
+                mtn = len(codes_mtn & set(main_codes))
+                val = len(codes_val & set(main_codes))
+                explain = _ai_explain(
+                    {
+                        "対象SKU数": len(main_codes),
+                        "中央値(年計)": float(
+                            snapshot_disp.loc[
+                                snapshot_disp["product_code"].isin(main_codes),
+                                "year_sum_disp",
+                            ].median()
+                        ),
+                        "急勾配数": pos,
+                        "山数": mtn,
+                        "谷数": val,
+                    }
+                )
+                st.info(f"**AI比較コメント**：{explain}")
 
     tb_common = dict(
         period=period,
