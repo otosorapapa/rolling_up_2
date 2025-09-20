@@ -15,6 +15,7 @@ scikit-learn
 networkx
 python-louvain
 chardet
+PyYAML
 ruff
 black
 pytest
