@@ -666,7 +666,7 @@ def apply_tour_highlight(step: Optional[Dict[str, str]]) -> None:
 
         const hints = Array.from(doc.querySelectorAll('div, span')).filter((el) => normalize(el.textContent).includes('→キーで次へ'));
         hints.forEach((el) => el.remove());
-    };
+    }};
     setTimeout(run, 120);
     </script>
     """
