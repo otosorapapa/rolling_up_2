@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional, List, Dict
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -309,6 +310,103 @@ small, .text-small{ font-size:0.88rem; }
   color:#ffffff;
   box-shadow:0 12px 28px rgba(10,46,92,0.32);
 }
+.tour-banner{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:18px;
+  padding:1.1rem 1.4rem;
+  margin:0 0 1.2rem;
+  position:relative;
+  overflow:hidden;
+  box-shadow:0 18px 38px rgba(11,44,74,0.16);
+}
+.tour-banner::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(135deg, rgba(15,60,105,0.12), rgba(71,183,212,0.12));
+  opacity:0.25;
+  pointer-events:none;
+}
+.tour-banner > div{ position:relative; z-index:1; }
+.tour-banner--muted{
+  background:linear-gradient(135deg, rgba(15,60,105,0.05), rgba(15,60,105,0.02));
+  border-style:dashed;
+  box-shadow:none;
+}
+.tour-banner__progress{
+  text-transform:uppercase;
+  letter-spacing:.12em;
+  font-size:.78rem;
+  color:var(--muted);
+  margin-bottom:.35rem;
+  font-weight:600;
+}
+.tour-banner__title{
+  font-size:1.42rem;
+  font-weight:800;
+  color:var(--accent-strong);
+  margin-bottom:.35rem;
+}
+.tour-banner__desc{
+  margin-bottom:.25rem;
+  color:var(--muted);
+  font-size:.96rem;
+}
+.tour-banner__details{
+  margin:0;
+  font-size:.94rem;
+  color:var(--text);
+}
+.tour-banner__actions{
+  display:flex;
+  flex-direction:column;
+  gap:.6rem;
+  align-items:stretch;
+}
+.tour-banner__actions [data-testid="stButton"]>button{
+  width:100%;
+  border-radius:12px;
+  font-weight:700;
+  box-shadow:0 12px 24px rgba(15,76,129,0.24);
+}
+.tour-banner--muted .tour-banner__actions [data-testid="stButton"]>button{
+  box-shadow:none;
+}
+.tour-highlight-heading{
+  position:relative;
+  border-radius:18px;
+  outline:3px solid rgba(15,76,129,0.45);
+  box-shadow:0 18px 36px rgba(15,76,129,0.22);
+  background:linear-gradient(135deg, rgba(15,60,105,0.08), rgba(169,208,231,0.18));
+  transition:box-shadow .3s ease;
+}
+.tour-highlight-heading h2{
+  color:var(--accent-strong) !important;
+}
+.tour-highlight-heading::after{
+  content:"";
+  position:absolute;
+  inset:8px;
+  border-radius:14px;
+  border:1px solid rgba(15,76,129,0.28);
+  pointer-events:none;
+}
+section[data-testid="stSidebar"] label.tour-highlight-nav{
+  border:1.6px solid rgba(255,255,255,0.72);
+  border-radius:12px;
+  background:rgba(255,255,255,0.18);
+  box-shadow:0 0 0 3px rgba(255,255,255,0.24);
+}
+section[data-testid="stSidebar"] label.tour-highlight-nav *{
+  color:#ffffff !important;
+}
+.tour-banner--muted .tour-banner__progress{
+  color:var(--muted);
+}
+.tour-banner--muted .tour-banner__desc{
+  color:var(--muted);
+}
 .chart-card{
   background:var(--panel);
   border:1px solid var(--border);
@@ -398,6 +496,12 @@ if "copilot_context" not in st.session_state:
     st.session_state.copilot_context = ""
 if "copilot_focus" not in st.session_state:
     st.session_state.copilot_focus = "全体サマリー"
+if "tour_active" not in st.session_state:
+    st.session_state.tour_active = True
+if "tour_step_index" not in st.session_state:
+    st.session_state.tour_step_index = 0
+if "tour_completed" not in st.session_state:
+    st.session_state.tour_completed = False
 
 # track user interactions and global filters
 if "click_log" not in st.session_state:
@@ -427,6 +531,146 @@ def render_app_hero():
     )
 
 
+def get_current_tour_step() -> Optional[Dict[str, str]]:
+    if not st.session_state.get("tour_active", True):
+        return None
+    if not TOUR_STEPS:
+        return None
+    idx = max(0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1))
+    return TOUR_STEPS[idx]
+
+
+def render_tour_banner() -> None:
+    if not TOUR_STEPS:
+        return
+
+    total = len(TOUR_STEPS)
+    idx = max(0, min(st.session_state.get("tour_step_index", 0), total - 1))
+    st.session_state.tour_step_index = idx
+    active = st.session_state.get("tour_active", True)
+
+    banner = st.container()
+    with banner:
+        banner_class = "tour-banner" if active else "tour-banner tour-banner--muted"
+        st.markdown(f"<div class='{banner_class}'>", unsafe_allow_html=True)
+        info_col, action_col = st.columns([5, 1])
+
+        if active:
+            step = TOUR_STEPS[idx]
+            info_col.markdown(
+                f"<p class='tour-banner__progress'>STEP {idx + 1} / {total}</p>",
+                unsafe_allow_html=True,
+            )
+            info_col.markdown(
+                f"<div class='tour-banner__title'>{step['title']}</div>",
+                unsafe_allow_html=True,
+            )
+            info_col.markdown(
+                f"<p class='tour-banner__desc'>{step['description']}</p>",
+                unsafe_allow_html=True,
+            )
+            details = step.get("details")
+            if details:
+                info_col.markdown(
+                    f"<p class='tour-banner__details'>{details}</p>",
+                    unsafe_allow_html=True,
+                )
+
+            action_col.markdown(
+                "<div class='tour-banner__actions'>", unsafe_allow_html=True
+            )
+            next_label = "完了" if idx == total - 1 else "次へ"
+            if action_col.button(next_label, key="tour_next"):
+                if idx == total - 1:
+                    st.session_state.tour_active = False
+                    st.session_state.tour_completed = True
+                else:
+                    st.session_state.tour_step_index = idx + 1
+                    st.session_state.tour_pending_nav = TOUR_STEPS[idx + 1]["label"]
+                    st.session_state.tour_completed = False
+                st.experimental_rerun()
+
+            if action_col.button("スキップ", key="tour_skip"):
+                st.session_state.tour_active = False
+                st.session_state.tour_completed = True
+                st.experimental_rerun()
+            action_col.markdown("</div>", unsafe_allow_html=True)
+        else:
+            info_col.markdown(
+                "<p class='tour-banner__progress'>チュートリアルツアー</p>",
+                unsafe_allow_html=True,
+            )
+            info_col.markdown(
+                "<p class='tour-banner__desc'>再開ボタンでいつでもハイライトを確認できます。</p>",
+                unsafe_allow_html=True,
+            )
+            action_col.markdown(
+                "<div class='tour-banner__actions'>", unsafe_allow_html=True
+            )
+            if action_col.button("ツアーを再開", key="tour_restart"):
+                st.session_state.tour_active = True
+                st.session_state.tour_completed = False
+                st.session_state.tour_step_index = 0
+                if TOUR_STEPS:
+                    st.session_state.tour_pending_nav = TOUR_STEPS[0]["label"]
+                st.experimental_rerun()
+            action_col.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
+def apply_tour_highlight(step: Optional[Dict[str, str]]) -> None:
+    payload = {
+        "key": step.get("key") if step else "",
+        "label": step.get("label") if step else "",
+        "heading": step.get("heading") if step else "",
+    }
+    script = f"""
+    <script>
+    const STEP = {json.dumps(payload, ensure_ascii=False)};
+    const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim();
+    const doc = window.parent.document;
+    const run = () => {{
+        const root = doc.documentElement;
+        if (STEP.key) {{
+            root.setAttribute('data-tour-key', STEP.key);
+        }} else {{
+            root.removeAttribute('data-tour-key');
+        }}
+
+        const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        if (sidebar) {{
+            sidebar.querySelectorAll('.tour-highlight-nav').forEach((el) => el.classList.remove('tour-highlight-nav'));
+            if (STEP.label) {{
+                const labels = Array.from(sidebar.querySelectorAll('label'));
+                const target = labels.find((el) => normalize(el.innerText) === normalize(STEP.label));
+                if (target) {{
+                    target.classList.add('tour-highlight-nav');
+                    target.scrollIntoView({{ block: 'nearest' }});
+                }}
+            }}
+        }}
+
+        doc.querySelectorAll('.tour-highlight-heading').forEach((el) => el.classList.remove('tour-highlight-heading'));
+        if (STEP.heading) {{
+            const headings = Array.from(doc.querySelectorAll('h1, h2, h3'));
+            const targetHeading = headings.find((el) => normalize(el.innerText) === normalize(STEP.heading));
+            if (targetHeading) {{
+                const container = targetHeading.closest('.mck-section-header') || targetHeading.parentElement;
+                if (container) {{
+                    container.classList.add('tour-highlight-heading');
+                    container.scrollIntoView({{ block: 'start', behavior: 'smooth' }});
+                }}
+            }}
+        }}
+
+        const hints = Array.from(doc.querySelectorAll('div, span')).filter((el) => normalize(el.textContent).includes('→キーで次へ'));
+        hints.forEach((el) => el.remove());
+    };
+    setTimeout(run, 120);
+    </script>
+    """
+    components.html(script, height=0)
 def section_header(
     title: str, subtitle: Optional[str] = None, icon: Optional[str] = None
 ):
@@ -775,13 +1019,139 @@ SIDEBAR_PAGES = [
     ("💾 保存ビュー", "保存ビュー"),
 ]
 
+TOUR_STEPS: List[Dict[str, str]] = [
+    {
+        "key": "import",
+        "label": "📥 データ取込",
+        "page": "データ取込",
+        "heading": "データ取込",
+        "title": "データ取込",
+        "description": "月次の売上データをアップロードし、年計テーブルを生成します。",
+        "details": "CSV / Excel のマッピングを完了すると全ての可視化が有効になります。",
+    },
+    {
+        "key": "dashboard",
+        "label": "🏠 ホーム",
+        "page": "ダッシュボード",
+        "heading": "ダッシュボード",
+        "title": "ダッシュボード",
+        "description": "年計KPIと総合トレンドを俯瞰し、AIサマリーで直近の動きを把握します。",
+        "details": "ハイライトとランキングタブを切り替えて主要SKUの変化をチェック。",
+    },
+    {
+        "key": "ranking",
+        "label": "📊 ランキング",
+        "page": "ランキング",
+        "heading": "ランキング",
+        "title": "ランキング",
+        "description": "指定月の上位・下位SKUを指標別に比較して、勢いのある商品を見つけます。",
+        "details": "並び順や対象指標を切り替え、CSV/Excelで共有用にエクスポートできます。",
+    },
+    {
+        "key": "compare",
+        "label": "🔁 比較ビュー",
+        "page": "比較ビュー",
+        "heading": "マルチ商品比較",
+        "title": "比較ビュー",
+        "description": "条件で絞った複数SKUの推移を重ね合わせ、帯やバンドで素早く切り替えます。",
+        "details": "操作バーで期間や表示を選び、スモールマルチプルで個別の動きを確認。",
+    },
+    {
+        "key": "detail",
+        "label": "🧾 SKU詳細",
+        "page": "SKU詳細",
+        "heading": "SKU 詳細",
+        "title": "SKU詳細",
+        "description": "個別SKUの時系列と指標を確認し、メモやタグでアクションを記録します。",
+        "details": "単品/複数比較モードとAIサマリーで詳細な解釈を補助。",
+    },
+    {
+        "key": "anomaly",
+        "label": "⚠️ 異常検知",
+        "page": "異常検知",
+        "heading": "異常検知",
+        "title": "異常検知",
+        "description": "回帰残差ベースで異常な月次を検知し、スコアの高い事象を優先的に確認します。",
+        "details": "窓幅・閾値を調整し、AI異常サマリーで発生背景を把握。",
+    },
+    {
+        "key": "correlation",
+        "label": "🔗 相関分析",
+        "page": "相関分析",
+        "heading": "相関分析",
+        "title": "相関分析",
+        "description": "指標間の関係性やSKU同士の動きを散布図と相関係数で分析します。",
+        "details": "相関指標や対象SKUを選び、外れ値の注釈からインサイトを発見。",
+    },
+    {
+        "key": "category",
+        "label": "🛍️ 併買カテゴリ",
+        "page": "併買カテゴリ",
+        "heading": "購買カテゴリ探索",
+        "title": "併買カテゴリ",
+        "description": "購買ネットワークをクラスタリングしてクロスセル候補のグルーピングを見つけます。",
+        "details": "入力データや閾値・検出法を変え、ネットワーク可視化をチューニング。",
+    },
+    {
+        "key": "alert",
+        "label": "🚨 アラート",
+        "page": "アラート",
+        "heading": "アラート",
+        "title": "アラート",
+        "description": "設定した閾値に該当するリスクSKUを一覧化し、優先度の高い対応を整理します。",
+        "details": "CSVダウンロードで日次の共有や監視に活用。",
+    },
+    {
+        "key": "settings",
+        "label": "⚙️ 設定",
+        "page": "設定",
+        "heading": "設定",
+        "title": "設定",
+        "description": "年計ウィンドウやアラート条件など、分析の前提を調整します。",
+        "details": "変更後は再計算ボタンでデータを更新し、全ページに反映します。",
+    },
+    {
+        "key": "saved",
+        "label": "💾 保存ビュー",
+        "page": "保存ビュー",
+        "heading": "保存ビュー",
+        "title": "保存ビュー",
+        "description": "現在の設定や比較条件を名前付きで保存し、ワンクリックで再現できます。",
+        "details": "設定と比較条件を共有し、分析の再現性を高めます。",
+    },
+]
+
+nav_labels = [label for label, _ in SIDEBAR_PAGES]
+page_lookup = dict(SIDEBAR_PAGES)
+
+if st.session_state.get("tour_active", True) and TOUR_STEPS:
+    initial_idx = max(0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1))
+    default_label = TOUR_STEPS[initial_idx]["label"]
+    if default_label not in nav_labels:
+        default_label = nav_labels[0]
+else:
+    default_label = nav_labels[0]
+
+if "nav_page" not in st.session_state:
+    st.session_state["nav_page"] = default_label
+
+if "tour_pending_nav" in st.session_state:
+    pending = st.session_state.pop("tour_pending_nav")
+    if pending in nav_labels:
+        st.session_state["nav_page"] = pending
+
 page_label = st.sidebar.radio(
     "利用する機能を選択",
-    [label for label, _ in SIDEBAR_PAGES],
-    index=0,
+    nav_labels,
+    key="nav_page",
 )
-page_lookup = dict(SIDEBAR_PAGES)
 page = page_lookup[page_label]
+
+if st.session_state.get("tour_active", True):
+    for idx, step in enumerate(TOUR_STEPS):
+        if step["label"] == page_label:
+            st.session_state.tour_step_index = idx
+            break
 latest_month = render_sidebar_summary()
 
 sidebar_state: Dict[str, object] = {}
@@ -925,6 +1295,8 @@ with st.sidebar.expander("AIコパイロット", expanded=False):
 st.sidebar.divider()
 
 render_app_hero()
+
+render_tour_banner()
 
 if (
     st.session_state.data_year is None
@@ -2600,3 +2972,6 @@ elif page == "保存ビュー":
                 st.session_state.compare_params = v.get("compare", {})
                 st.session_state.compare_results = None
                 st.success(f"ビュー「{k}」を適用しました。")
+
+current_tour_step = get_current_tour_step()
+apply_tour_highlight(current_tour_step)
