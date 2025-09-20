@@ -19,6 +19,13 @@ from ai_features import (
     answer_question,
     generate_anomaly_brief,
 )
+from core.i18n import (
+    get_available_languages,
+    get_current_language,
+    init_language,
+    language_name,
+    t,
+)
 
 # McKinsey inspired pastel palette
 MCKINSEY_PALETTE = [
@@ -31,6 +38,9 @@ MCKINSEY_PALETTE = [
 ]
 # Apply palette across figures
 px.defaults.color_discrete_sequence = MCKINSEY_PALETTE
+
+init_language()
+current_language = get_current_language()
 
 PLOTLY_CONFIG = {
     "locale": "ja",
@@ -49,8 +59,9 @@ PLOTLY_CONFIG = {
     ],
     "toImageButtonOptions": {"format": "png", "filename": "年計比較"},
 }
+PLOTLY_CONFIG["locale"] = "ja" if current_language == "ja" else "en"
 
-APP_TITLE = "売上年計（12カ月移動累計）ダッシュボード"
+APP_TITLE = t("header.title", language=current_language)
 st.set_page_config(
     page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded"
 )
@@ -422,13 +433,36 @@ section[data-testid="stSidebar"] label.tour-highlight-nav *{
     unsafe_allow_html=True,
 )
 
-# ===== Elegant（品格）UI ON/OFF（ヘッダに設置） =====
-elegant_on = st.toggle(
-    "品格UI",
-    value=True,
-    help="上品で読みやすい配色・余白・タイポグラフィを適用",
-)
-st.session_state["elegant_on"] = elegant_on
+# ===== Elegant（品格）UI ON/OFF & Language Selector =====
+if "elegant_on" not in st.session_state:
+    st.session_state["elegant_on"] = True
+
+with st.container():
+    control_left, control_right = st.columns([3, 1])
+    with control_left:
+        elegant_on = st.toggle(
+            t("header.elegant_toggle.label"),
+            value=st.session_state.get("elegant_on", True),
+            help=t("header.elegant_toggle.help"),
+            key="elegant_ui_toggle",
+        )
+        st.session_state["elegant_on"] = elegant_on
+    with control_right:
+        language_codes = get_available_languages()
+        if language_codes:
+            current_value = st.session_state.get("language")
+            if current_value not in language_codes:
+                st.session_state["language"] = language_codes[0]
+        else:
+            language_codes = [get_current_language()]
+        st.selectbox(
+            t("header.language_selector.label"),
+            options=language_codes,
+            key="language",
+            format_func=lambda code: language_name(code),
+        )
+
+elegant_on = st.session_state.get("elegant_on", True)
 
 # ===== 品格UI CSS（配色/余白/フォント/境界の見直し） =====
 if elegant_on:
@@ -522,9 +556,9 @@ def render_app_hero():
     st.markdown(
         f"""
         <div class=\"mck-hero\">
-            <div class=\"mck-hero__eyebrow\">Growth Intelligence Workspace</div>
-            <h1>{APP_TITLE}</h1>
-            <p>12カ月移動累計で成長ドライバーとリスクを直感的に把握し、次の一手を素早く導きます。</p>
+            <div class=\"mck-hero__eyebrow\">{t("header.eyebrow")}</div>
+            <h1>{t("header.title")}</h1>
+            <p>{t("header.description")}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1003,7 +1037,7 @@ st.sidebar.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.sidebar.title("ナビゲーション")
+st.sidebar.title(t("sidebar.navigation_title"))
 
 SIDEBAR_PAGES = [
     ("🏠 ホーム", "ダッシュボード"),

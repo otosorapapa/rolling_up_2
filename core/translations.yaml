@@ -1,0 +1,38 @@
+languages:
+  - ja
+  - en
+
+language_names:
+  ja:
+    ja: 日本語
+    en: Japanese
+  en:
+    ja: 英語
+    en: English
+
+header:
+  title:
+    ja: "売上年計（12カ月移動累計）ダッシュボード"
+    en: "Rolling 12-Month Total Sales Dashboard"
+  eyebrow:
+    ja: "グロースインテリジェンス・ワークスペース"
+    en: "Growth Intelligence Workspace"
+  description:
+    ja: "12カ月移動累計で成長ドライバーとリスクを直感的に把握し、次の一手を素早く導きます。"
+    en: "Understand growth drivers and risks through a rolling 12-month view and decide the next action quickly."
+  elegant_toggle:
+    label:
+      ja: "品格UI"
+      en: "Elegant UI"
+    help:
+      ja: "上品で読みやすい配色・余白・タイポグラフィを適用"
+      en: "Apply refined colors, spacing, and typography for a polished reading experience."
+  language_selector:
+    label:
+      ja: "言語"
+      en: "Language"
+
+sidebar:
+  navigation_title:
+    ja: "ナビゲーション"
+    en: "Navigation"
