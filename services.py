@@ -130,7 +130,7 @@ def _parse_with_mapping(
 ) -> pd.DataFrame:
     """Normalize a long-form table using an explicit column mapping."""
 
-    required_keys = ["month", "channel", "product_name", "sales"]
+    required_keys = ["month", "product_name", "sales"]
     missing_required = [k for k in required_keys if not mapping.get(k)]
     if missing_required:
         raise ValueError(
