@@ -240,352 +240,96 @@ def render_column_mapping_tool(
     *,
     key: str,
 ) -> Optional[Dict[str, Optional[str]]]:
-    column_payload: List[Dict[str, str]] = []
+    unassigned_token = f"__{key}_unassigned__"
+
     id_to_column: Dict[str, object] = {}
-    name_to_id: Dict[object, str] = {}
+    label_by_id: Dict[str, str] = {}
+    value_to_id: Dict[object, str] = {}
     for idx, column in enumerate(columns):
-        column_id = f"col_{idx}"
-        column_payload.append({"id": column_id, "label": str(column)})
+        column_id = f"{key}_col_{idx}"
         id_to_column[column_id] = column
-        if column not in name_to_id:
-            name_to_id[column] = column_id
+        label = str(column)
+        label_by_id[column_id] = label
+        if column not in value_to_id:
+            value_to_id[column] = column_id
 
-    normalized_mapping = {}
-    for field in UPLOAD_FIELD_DEFS:
-        value = mapping.get(field["key"])
-        normalized_mapping[field["key"]] = name_to_id.get(value)
-
-    fields_payload = [
-        {
-            "field": field["key"],
-            "label": field["label"],
-            "description": field["description"],
-            "required": field["required"],
-        }
+    mapping_ids = {
+        field["key"]: value_to_id.get(mapping.get(field["key"]))
         for field in UPLOAD_FIELD_DEFS
-    ]
+    }
 
-    columns_json = json.dumps(column_payload, ensure_ascii=False)
-    fields_json = json.dumps(fields_payload, ensure_ascii=False)
-    mapping_json = json.dumps(normalized_mapping, ensure_ascii=False)
-
-    field_blocks = []
-    for field in UPLOAD_FIELD_DEFS:
-        badge = (
-            "<span class='mapping-badge mapping-badge--required'>必須</span>"
-            if field["required"]
-            else "<span class='mapping-badge mapping-badge--optional'>任意</span>"
-        )
-        title = html.escape(field["label"])
-        description = html.escape(field["description"])
-        field_blocks.append(
-            f"""
-            <div class=\"mapping-field\">
-                <div class=\"mapping-field__label\">
-                    <span class=\"mapping-field__title\">{title}</span>
-                    {badge}
-                </div>
-                <div class=\"mapping-field__description\">{description}</div>
-                <div class=\"mapping-field__dropzone dropzone\" data-field=\"{field['key']}\"></div>
-            </div>
-            """
-        )
-
-    fields_html = "\n".join(field_blocks)
-
-    html_code = f"""
-    <style>
-      .mapping-tool{{
-        border:1px solid rgba(18,58,95,0.18);
-        border-radius:16px;
-        background:rgba(255,255,255,0.85);
-        padding:16px;
-        box-shadow:0 6px 18px rgba(10,46,92,0.08);
-      }}
-      .mapping-tool__container{{
-        display:flex;
-        flex-wrap:wrap;
-        gap:16px;
-      }}
-      .mapping-tool__panel{{
-        flex:1 1 280px;
-        background:#ffffff;
-        border:1px solid #dbe4f2;
-        border-radius:12px;
-        padding:16px;
-        box-shadow:inset 0 1px 0 rgba(255,255,255,0.6);
-      }}
-      .mapping-tool__header{{
-        font-weight:700;
-        color:#0f4c81;
-        margin-bottom:12px;
-        font-size:15px;
-      }}
-      .mapping-tool__list{{
-        display:flex;
-        flex-wrap:wrap;
-        gap:8px;
-        min-height:60px;
-        border:1px dashed #b6c6da;
-        border-radius:10px;
-        padding:12px;
-        background:#f4f8fd;
-        transition:border-color .2s, background .2s;
-      }}
-      .mapping-tool__list.list--active{{
-        border-color:#2d6f8e;
-        background:rgba(45,111,142,0.08);
-      }}
-      .dropzone{{
-        min-height:56px;
-        border:1px dashed #b6c6da;
-        border-radius:10px;
-        padding:12px;
-        background:#f4f8fd;
-        display:flex;
-        flex-wrap:wrap;
-        gap:8px;
-        align-items:center;
-        transition:border-color .2s, background .2s;
-      }}
-      .dropzone.dropzone--active{{
-        border-color:#2d6f8e;
-        background:rgba(45,111,142,0.08);
-      }}
-      .pill{{
-        background:#ffffff;
-        border:1px solid #2d6f8e;
-        color:#0b1726;
-        padding:4px 12px;
-        border-radius:999px;
-        font-size:13px;
-        font-weight:600;
-        cursor:grab;
-        user-select:none;
-        box-shadow:0 2px 6px rgba(18,58,95,0.08);
-      }}
-      .pill--assigned{{
-        background:#2d6f8e;
-        color:#ffffff;
-      }}
-      .pill--dragging{{ opacity:0.6; }}
-      .placeholder{{
-        font-size:12px;
-        color:#6d7c91;
-        font-style:italic;
-      }}
-      .mapping-field{{ margin-bottom:14px; }}
-      .mapping-field:last-child{{ margin-bottom:0; }}
-      .mapping-field__label{{
-        display:flex;
-        align-items:center;
-        gap:8px;
-        margin-bottom:4px;
-      }}
-      .mapping-field__title{{
-        font-weight:700;
-        color:#0b2f4c;
-      }}
-      .mapping-field__description{{
-        font-size:12px;
-        color:#52657a;
-        margin-bottom:6px;
-      }}
-      .mapping-badge{{
-        font-size:11px;
-        padding:2px 8px;
-        border-radius:999px;
-        background:rgba(15,76,129,0.12);
-        color:#0f4c81;
-        font-weight:600;
-      }}
-      .mapping-badge--required{{
-        background:rgba(197,48,48,0.16);
-        color:#a11f1f;
-      }}
-      .mapping-tool__hint{{
-        margin-top:10px;
-        font-size:12px;
-        color:#52657a;
-      }}
-    </style>
-    <div class="mapping-tool" id="mapping-root">
-      <div class="mapping-tool__container">
-        <div class="mapping-tool__panel">
-          <div class="mapping-tool__header">アップロード列</div>
-          <div class="mapping-tool__list" id="available-columns"></div>
-          <div class="mapping-tool__hint">ドラッグ＆ドロップで割り当て、ダブルクリックで元に戻せます。</div>
-        </div>
-        <div class="mapping-tool__panel">
-          <div class="mapping-tool__header">必要項目</div>
-          {fields_html}
-        </div>
-      </div>
-    </div>
-    <script>
-    (function() {{
-        const columns = {columns_json};
-        const columnById = Object.fromEntries(columns.map(col => [col.id, col]));
-        const fields = {fields_json};
-        const initialMapping = {mapping_json} || {{}};
-        const state = {{ mapping: {{}} }};
-        fields.forEach(field => {{
-            state.mapping[field.field] = initialMapping[field.field] || null;
-        }});
-        const root = document.getElementById("mapping-root");
-        const available = document.getElementById("available-columns");
-
-        function pushValue() {{
-            if (window.Streamlit && window.Streamlit.setComponentValue) {{
-                Streamlit.setComponentValue(state.mapping);
-            }}
-        }}
-
-        function render() {{
-            const used = new Set(Object.values(state.mapping).filter(Boolean));
-            available.innerHTML = "";
-            columns.forEach(col => {{
-                if (!used.has(col.id)) {{
-                    const pill = document.createElement("div");
-                    pill.className = "pill";
-                    pill.textContent = col.label;
-                    pill.dataset.col = col.id;
-                    available.appendChild(pill);
-                }}
-            }});
-            fields.forEach(field => {{
-                const zone = root.querySelector(`.dropzone[data-field="${{field.field}}"]`);
-                if (!zone) return;
-                zone.innerHTML = "";
-                const mappedId = state.mapping[field.field];
-                if (mappedId && columnById[mappedId]) {{
-                    const pill = document.createElement("div");
-                    pill.className = "pill pill--assigned";
-                    pill.textContent = columnById[mappedId].label;
-                    pill.dataset.col = mappedId;
-                    zone.appendChild(pill);
-                }} else {{
-                    const placeholder = document.createElement("div");
-                    placeholder.className = "placeholder";
-                    placeholder.textContent = "ここにドロップ";
-                    zone.appendChild(placeholder);
-                }}
-            }});
-            pushValue();
-        }}
-
-        function release(colId) {{
-            let changed = false;
-            Object.keys(state.mapping).forEach(key => {{
-                if (state.mapping[key] === colId) {{
-                    state.mapping[key] = null;
-                    changed = true;
-                }}
-            }});
-            if (changed) {{
-                render();
-            }}
-        }}
-
-        function assign(fieldKey, colId) {{
-            if (!columnById[colId]) {{
-                return;
-            }}
-            let changed = false;
-            Object.keys(state.mapping).forEach(key => {{
-                if (state.mapping[key] === colId && key !== fieldKey) {{
-                    state.mapping[key] = null;
-                    changed = true;
-                }}
-            }});
-            if (state.mapping[fieldKey] !== colId) {{
-                state.mapping[fieldKey] = colId;
-                changed = true;
-            }}
-            if (changed) {{
-                render();
-            }}
-        }}
-
-        root.addEventListener("dragstart", event => {{
-            const pill = event.target.closest(".pill");
-            if (!pill) return;
-            event.dataTransfer.setData("text/plain", pill.dataset.col || "");
-            event.dataTransfer.effectAllowed = "move";
-            pill.classList.add("pill--dragging");
-        }});
-
-        root.addEventListener("dragend", event => {{
-            const pill = event.target.closest(".pill");
-            if (pill) pill.classList.remove("pill--dragging");
-        }});
-
-        root.addEventListener("dblclick", event => {{
-            const pill = event.target.closest(".pill");
-            if (!pill) return;
-            release(pill.dataset.col || "");
-        }});
-
-        root.addEventListener("dragover", event => {{
-            const zone = event.target.closest(".dropzone");
-            if (zone) {{
-                event.preventDefault();
-                zone.classList.add("dropzone--active");
-                return;
-            }}
-            if (event.target.closest("#available-columns")) {{
-                event.preventDefault();
-                available.classList.add("list--active");
-            }}
-        }});
-
-        root.addEventListener("dragleave", event => {{
-            const zone = event.target.closest(".dropzone");
-            if (zone) {{
-                zone.classList.remove("dropzone--active");
-                return;
-            }}
-            if (event.target.closest("#available-columns")) {{
-                available.classList.remove("list--active");
-            }}
-        }});
-
-        root.addEventListener("drop", event => {{
-            const colId = event.dataTransfer.getData("text/plain");
-            const zone = event.target.closest(".dropzone");
-            if (zone) {{
-                event.preventDefault();
-                zone.classList.remove("dropzone--active");
-                if (colId) {{
-                    assign(zone.dataset.field, colId);
-                }}
-                return;
-            }}
-            if (event.target.closest("#available-columns")) {{
-                event.preventDefault();
-                available.classList.remove("list--active");
-                if (colId) {{
-                    release(colId);
-                }}
-            }}
-        }});
-
-        render();
-        if (window.Streamlit && window.Streamlit.setComponentReady) {{
-            Streamlit.setComponentReady();
-        }}
-    }})();
-    </script>
-    """
-
-    component_value = components.html(html_code, height=420, scrolling=False, key=key)
-    if isinstance(component_value, dict):
-        resolved: Dict[str, Optional[str]] = {}
+    state_ids_key = f"{key}__selected_ids"
+    if state_ids_key not in st.session_state:
+        st.session_state[state_ids_key] = mapping_ids.copy()
         for field in UPLOAD_FIELD_DEFS:
-            mapped_id = component_value.get(field["key"])
-            resolved[field["key"]] = id_to_column.get(mapped_id)
-        return resolved
-    return None
+            widget_key = f"{key}__select__{field['key']}"
+            st.session_state[widget_key] = (
+                mapping_ids[field["key"]] or unassigned_token
+            )
+    elif st.session_state[state_ids_key] != mapping_ids:
+        st.session_state[state_ids_key] = mapping_ids.copy()
+        for field in UPLOAD_FIELD_DEFS:
+            widget_key = f"{key}__select__{field['key']}"
+            st.session_state[widget_key] = (
+                mapping_ids[field["key"]] or unassigned_token
+            )
+
+    option_ids = [unassigned_token] + list(id_to_column.keys())
+
+    def format_option(option_id: str) -> str:
+        if option_id == unassigned_token:
+            return "未割当"
+        return label_by_id.get(option_id, option_id)
+
+    if label_by_id:
+        st.markdown(
+            "<div style='margin-bottom:0.75rem'>"
+            + "".join(
+                f"<span style='display:inline-block;padding:4px 10px;margin:2px;border-radius:999px;"
+                "background:#eef4fb;border:1px solid #c7d7eb;font-size:12px;color:#0b2f4c'>"
+                f"{html.escape(label)}</span>"
+                for label in label_by_id.values()
+            )
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("アップロードされた列がありません。")
+
+    selected_ids: Dict[str, Optional[str]] = {}
+    for field in UPLOAD_FIELD_DEFS:
+        widget_key = f"{key}__select__{field['key']}"
+        desired_default = mapping_ids[field["key"]] or unassigned_token
+        if widget_key not in st.session_state:
+            st.session_state[widget_key] = desired_default
+        elif st.session_state[widget_key] not in option_ids:
+            st.session_state[widget_key] = unassigned_token
+
+        label = field["label"] + ("（必須）" if field["required"] else "（任意）")
+        selected = st.selectbox(
+            label,
+            options=option_ids,
+            format_func=format_option,
+            key=widget_key,
+            help=field["description"],
+        )
+        st.caption(field["description"])
+        selected_ids[field["key"]] = (
+            None if selected == unassigned_token else selected
+        )
+
+    st.session_state[state_ids_key] = selected_ids.copy()
+
+    resolved_mapping: Dict[str, Optional[str]] = {}
+    for field in UPLOAD_FIELD_DEFS:
+        mapped_id = selected_ids.get(field["key"])
+        resolved_mapping[field["key"]] = id_to_column.get(mapped_id)
+
+    changed = any(
+        resolved_mapping.get(field["key"]) != mapping.get(field["key"])
+        for field in UPLOAD_FIELD_DEFS
+    )
+    return resolved_mapping if changed else None
 
 
 @st.cache_data(show_spinner=False)
