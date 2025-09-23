@@ -134,3 +134,42 @@ def test_parse_with_mapping_without_channel_column():
 
     assert set(result["channel"].unique()) == {"全チャネル"}
     assert result["sales_amount_jpy"].sum() == 1100
+
+
+def test_parse_wide_table_auto_detects_month_and_sales():
+    df = pd.DataFrame(
+        {
+            "商品名": ["Alpha", "Alpha", "Beta"],
+            "チャネル": ["EC", "店舗", "EC"],
+            "2024-01": [1000, 500, 300],
+            "2024-02": [1100, 600, None],
+        }
+    )
+
+    mapping = {
+        "product_name": "商品名",
+        "channel": "チャネル",
+        "product_code": None,
+        "category": None,
+        "customer": None,
+        "region": None,
+        "month": None,
+        "sales": None,
+    }
+
+    result = parse_uploaded_table(df, column_mapping=mapping)
+
+    assert set(result["month"].unique()) == {"2024-01", "2024-02"}
+
+    alpha_ec = result[
+        (result["product_name"] == "Alpha｜EC") & (result["month"] == "2024-01")
+    ]
+    assert not alpha_ec.empty
+    assert alpha_ec["sales_amount_jpy"].iloc[0] == 1000
+
+    beta_feb = result[
+        (result["product_name"] == "Beta｜EC") & (result["month"] == "2024-02")
+    ]
+    assert not beta_feb.empty
+    assert pd.isna(beta_feb["sales_amount_jpy"].iloc[0])
+    assert bool(beta_feb["is_missing"].iloc[0])
