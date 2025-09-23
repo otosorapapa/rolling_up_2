@@ -1,3 +1,4 @@
+import html
 import io
 import json
 import math
@@ -1203,6 +1204,105 @@ st.markdown(
     [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__desc{
       color:rgba(255,255,255,0.92) !important;
     }
+    .has-tooltip{
+      position:relative;
+    }
+    .has-tooltip::after,
+    .has-tooltip::before{
+      pointer-events:none;
+      opacity:0;
+      transition:opacity .15s ease, transform .15s ease;
+    }
+    .has-tooltip[data-tooltip=""]::after,
+    .has-tooltip[data-tooltip=""]::before{
+      display:none;
+    }
+    .has-tooltip::after{
+      content:attr(data-tooltip);
+      position:absolute;
+      left:50%;
+      bottom:calc(100% + 8px);
+      transform:translate(-50%, 0);
+      background:rgba(11,23,38,0.92);
+      color:#ffffff;
+      padding:0.45rem 0.7rem;
+      border-radius:10px;
+      font-size:0.78rem;
+      line-height:1.4;
+      max-width:260px;
+      text-align:center;
+      box-shadow:0 12px 28px rgba(7,32,54,0.38);
+      white-space:pre-wrap;
+      z-index:60;
+    }
+    .has-tooltip::before{
+      content:"";
+      position:absolute;
+      left:50%;
+      bottom:calc(100% + 2px);
+      transform:translate(-50%, 0);
+      border:6px solid transparent;
+      border-top-color:rgba(11,23,38,0.92);
+      z-index:60;
+    }
+    .has-tooltip:hover::after,
+    .has-tooltip:hover::before,
+    .has-tooltip:focus-visible::after,
+    .has-tooltip:focus-visible::before{
+      opacity:1;
+      transform:translate(-50%, -4px);
+    }
+    .tour-step-guide{
+      display:flex;
+      flex-wrap:wrap;
+      gap:0.9rem;
+      margin:0 0 1.2rem;
+    }
+    .tour-step-guide__item{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:0.45rem;
+      padding:0.75rem 0.9rem;
+      border-radius:14px;
+      border:1px solid var(--border);
+      background:var(--panel);
+      box-shadow:0 12px 26px rgba(11,44,74,0.14);
+      min-width:120px;
+      position:relative;
+      transition:transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+    }
+    .tour-step-guide__item:hover{
+      transform:translateY(-3px);
+      box-shadow:0 18px 32px rgba(11,44,74,0.18);
+    }
+    .tour-step-guide__item[data-active="true"]{
+      border-color:rgba(15,76,129,0.55);
+      box-shadow:0 20px 40px rgba(15,76,129,0.22);
+    }
+    .tour-step-guide__item:focus-visible{
+      outline:3px solid rgba(15,76,129,0.35);
+      outline-offset:3px;
+    }
+    .tour-step-guide__icon{
+      width:48px;
+      height:48px;
+      border-radius:50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:1.45rem;
+      background:rgba(15,76,129,0.1);
+      color:var(--accent-strong);
+      box-shadow:0 10px 20px rgba(15,76,129,0.12);
+    }
+    .tour-step-guide__label{
+      font-size:0.95rem;
+      font-weight:700;
+      color:var(--accent-strong);
+      text-align:center;
+      line-height:1.3;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1222,7 +1322,7 @@ SIDEBAR_PAGES = [
         "page": "ダッシュボード",
         "icon": "🏠",
         "title": "ホーム",
-        "tagline": "全体ダッシュボード",
+        "tagline": "分析ダッシュボード",
         "tooltip": "主要KPIとトレンドを俯瞰できるダッシュボードです。",
         "category": "basic",
     },
@@ -1335,10 +1435,19 @@ def _hex_to_rgb_string(color: str) -> str:
     return "71, 183, 212"
 
 
+NAV_HOVER_LOOKUP: Dict[str, str] = {}
 nav_client_data: List[Dict[str, str]] = []
 for page in SIDEBAR_PAGES:
     category_info = SIDEBAR_CATEGORY_STYLES.get(page["category"], {})
     color = category_info.get("color", "#71b7d4")
+    hover_lines = [page.get("title", "").strip()]
+    tooltip_text = page.get("tooltip", "").strip()
+    tagline_text = page.get("tagline", "").strip()
+    if tooltip_text:
+        hover_lines.append(tooltip_text)
+    elif tagline_text:
+        hover_lines.append(tagline_text)
+    hover_text = "\n".join(filter(None, hover_lines))
     nav_client_data.append(
         {
             "key": page["key"],
@@ -1350,8 +1459,10 @@ for page in SIDEBAR_PAGES:
             "category_label": category_info.get("label", ""),
             "color": color,
             "rgb": _hex_to_rgb_string(color),
+            "hover_text": hover_text,
         }
     )
+    NAV_HOVER_LOOKUP[page["key"]] = hover_text
 
 used_category_keys = [
     cat for cat in SIDEBAR_CATEGORY_ORDER if any(p["category"] == cat for p in SIDEBAR_PAGES)
@@ -1485,6 +1596,71 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
 ]
 
+
+def render_step_guide(active_nav_key: str) -> None:
+    if not TOUR_STEPS:
+        return
+
+    items_html: List[str] = []
+    for step in TOUR_STEPS:
+        nav_key = step.get("nav_key")
+        if not nav_key:
+            continue
+
+        nav_meta = SIDEBAR_PAGE_LOOKUP.get(nav_key)
+        if not nav_meta:
+            continue
+
+        label_text = (
+            nav_meta.get("title")
+            or step.get("title")
+            or step.get("label")
+            or nav_key
+        )
+        icon_text = nav_meta.get("icon", "")
+
+        tooltip_candidates = [
+            NAV_HOVER_LOOKUP.get(nav_key, "").strip(),
+            step.get("description", "").strip(),
+            step.get("details", "").strip(),
+        ]
+        tooltip_parts: List[str] = []
+        for candidate in tooltip_candidates:
+            if candidate and candidate not in tooltip_parts:
+                tooltip_parts.append(candidate)
+
+        tooltip_text = "\n".join(tooltip_parts)
+        tooltip_attr = html.escape(tooltip_text, quote=True).replace("\n", "&#10;")
+        title_text = tooltip_text.replace("\n", " ") if tooltip_text else label_text
+        title_attr = html.escape(title_text, quote=True)
+        aria_label_text = tooltip_text.replace("\n", " ") if tooltip_text else label_text
+        aria_label_attr = html.escape(aria_label_text, quote=True)
+
+        icon_html = html.escape(icon_text)
+        label_html = html.escape(label_text)
+        data_active = "true" if nav_key == active_nav_key else "false"
+        aria_current_attr = ' aria-current="step"' if nav_key == active_nav_key else ""
+
+        item_html = (
+            f'<div class="tour-step-guide__item has-tooltip" data-step="{nav_key}" '
+            f'data-active="{data_active}" data-tooltip="{tooltip_attr}" title="{title_attr}" '
+            f'tabindex="0" role="listitem" aria-label="{aria_label_attr}"{aria_current_attr}>'
+            f'<span class="tour-step-guide__icon" aria-hidden="true">{icon_html}</span>'
+            f'<span class="tour-step-guide__label">{label_html}</span>'
+            "</div>"
+        )
+        items_html.append(item_html)
+
+    if not items_html:
+        return
+
+    st.markdown(
+        f'<div class="tour-step-guide" role="list" aria-label="主要ナビゲーションステップ">'
+        f'{"".join(items_html)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 if st.session_state.get("tour_active", True) and TOUR_STEPS:
     initial_idx = max(0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1))
     default_key = TOUR_STEPS[initial_idx]["nav_key"]
@@ -1535,9 +1711,17 @@ const NAV_DATA = {payload};
             if (!input) return;
             const meta = metaByKey[input.value];
             if (!meta) return;
+            const metaTitle = meta.title || '';
             label.dataset.navKey = meta.key;
             label.dataset.navCategory = meta.category;
-            label.setAttribute('title', meta.tooltip || '');
+            const tooltipText = (meta.hover_text || meta.tooltip || meta.tagline || '').trim();
+            const ariaLabel = tooltipText
+                ? (tooltipText.startsWith(metaTitle) ? tooltipText : `${metaTitle}: ${tooltipText}`)
+                : metaTitle;
+            label.setAttribute('title', tooltipText);
+            label.setAttribute('aria-label', ariaLabel);
+            label.dataset.tooltip = tooltipText;
+            label.classList.add('has-tooltip');
             label.style.setProperty('--nav-accent', meta.color || '#71b7d4');
             label.style.setProperty('--nav-accent-rgb', meta.rgb || '71, 183, 212');
             if (!label.classList.contains('nav-pill')) {
@@ -1583,8 +1767,9 @@ const NAV_DATA = {payload};
             } else {
                 iconSpan.textContent = meta.icon || '';
             }
-            input.setAttribute('aria-label', meta.title + (meta.tagline ? `: ${meta.tagline}` : ''));
-            input.setAttribute('title', meta.tooltip || '');
+            iconSpan.setAttribute('aria-hidden', 'true');
+            input.setAttribute('aria-label', ariaLabel);
+            input.setAttribute('title', tooltipText);
             if (!input.dataset.navEnhanced) {
                 input.addEventListener('change', updateActiveState);
                 input.dataset.navEnhanced = 'true';
@@ -1758,6 +1943,8 @@ st.sidebar.divider()
 render_app_hero()
 
 render_tour_banner()
+
+render_step_guide(page_key)
 
 if (
     st.session_state.data_year is None
