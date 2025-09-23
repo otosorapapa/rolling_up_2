@@ -12,6 +12,7 @@ RNG = np.random.default_rng(0)
 
 CHANNELS = ["Online", "Store", "Wholesale"]
 CATEGORIES = ["A", "B", "C"]
+REGIONS = ["Kanto", "Kansai", "Chubu", "Kyushu"]
 
 
 def generate_transactions(months: int = 36, n_sku: int = 200) -> pd.DataFrame:
@@ -21,6 +22,7 @@ def generate_transactions(months: int = 36, n_sku: int = 200) -> pd.DataFrame:
         for sku in range(n_sku):
             channel = RNG.choice(CHANNELS)
             category = RNG.choice(CATEGORIES)
+            region = RNG.choice(REGIONS)
             price = RNG.integers(100, 500)
             qty = RNG.poisson(5)
             if RNG.random() < 0.02:
@@ -34,6 +36,7 @@ def generate_transactions(months: int = 36, n_sku: int = 200) -> pd.DataFrame:
                     "product_code": f"SKU{sku:04d}",
                     "product_name": f"商品{sku:04d}",
                     "category": category,
+                    "region": region,
                     "qty": qty,
                     "unit_price": price,
                     "revenue": revenue,
