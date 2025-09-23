@@ -56,13 +56,19 @@ def month_range(min_m: str, max_m: str) -> List[str]:
 
 
 # ---------- Parsing & Normalization ----------
-def parse_uploaded_table(df: pd.DataFrame,
-                         product_name_col: Optional[str] = None,
-                         product_code_col: Optional[str] = None) -> pd.DataFrame:
+def parse_uploaded_table(
+    df: pd.DataFrame,
+    product_name_col: Optional[str] = None,
+    product_code_col: Optional[str] = None,
+    column_mapping: Optional[Dict[str, Optional[str]]] = None,
+) -> pd.DataFrame:
     """
     Accepts a wide table: first columns are product metadata, remaining columns are months.
     Returns long df: ['product_code','product_name','month','sales_amount_jpy']
     """
+    if column_mapping:
+        return _parse_with_mapping(df, column_mapping)
+
     cols = list(df.columns)
     # Auto-detect product name column if not provided: first column
     if product_name_col is None:
@@ -116,6 +122,147 @@ def parse_uploaded_table(df: pd.DataFrame,
     long_df["is_missing"] = long_df["sales_amount_jpy"].isna()
 
     return long_df[["product_code","product_name","month","sales_amount_jpy","is_missing"]]
+
+ 
+
+def _parse_with_mapping(
+    df: pd.DataFrame, mapping: Dict[str, Optional[str]]
+) -> pd.DataFrame:
+    """Normalize a long-form table using an explicit column mapping."""
+
+    required_keys = ["month", "channel", "product_name", "sales"]
+    missing_required = [k for k in required_keys if not mapping.get(k)]
+    if missing_required:
+        raise ValueError(
+            "未割当の必須列があります: " + ", ".join(missing_required)
+        )
+
+    for field, column in mapping.items():
+        if column is None:
+            continue
+        if column not in df.columns:
+            raise ValueError(f"列 '{column}' がファイル内に見つかりません。")
+
+    work = df.copy()
+
+    month_col = mapping["month"]
+    product_col = mapping["product_name"]
+    sales_col = mapping["sales"]
+    channel_col = mapping.get("channel")
+    code_col = mapping.get("product_code")
+
+    if (
+        month_col not in work.columns
+        or product_col not in work.columns
+        or sales_col not in work.columns
+    ):
+        raise ValueError("マッピングされた列がデータフレーム内に存在しません。")
+
+    work = work[work[month_col].notna()].copy()
+    if work.empty:
+        raise ValueError("有効な月度データが見つかりませんでした。")
+
+    month_series = work[month_col].apply(normalize_month_key)
+    product_series = (
+        work[product_col]
+        .fillna("")
+        .astype(str)
+        .str.strip()
+        .replace("", "未設定商品")
+    )
+
+    if channel_col and channel_col in work.columns:
+        channel_series = (
+            work[channel_col]
+            .fillna("全チャネル")
+            .astype(str)
+            .str.strip()
+            .replace("", "全チャネル")
+        )
+    else:
+        channel_series = pd.Series(["全チャネル"] * len(work), index=work.index)
+
+    sales_numeric = pd.to_numeric(work[sales_col], errors="coerce")
+    missing_sales = sales_numeric.isna()
+
+    if code_col and code_col in work.columns:
+        code_series = (
+            work[code_col]
+            .astype(str)
+            .str.strip()
+            .replace({"nan": "", "NaN": ""})
+        )
+    else:
+        code_series = pd.Series([""] * len(work), index=work.index)
+
+    table = pd.DataFrame(
+        {
+            "month": month_series,
+            "channel": channel_series,
+            "product_name": product_series,
+            "product_code_raw": code_series,
+            "sales_amount_jpy": sales_numeric,
+            "had_missing": missing_sales,
+        }
+    )
+
+    def _sum_numeric(series: pd.Series) -> float:
+        valid = series.dropna()
+        if valid.empty:
+            return np.nan
+        return float(valid.sum())
+
+    aggregated = (
+        table.groupby(
+            ["channel", "product_name", "product_code_raw", "month"],
+            dropna=False,
+            sort=False,
+        )
+        .agg(
+            sales_amount_jpy=("sales_amount_jpy", _sum_numeric),
+            missing_count=("had_missing", "sum"),
+        )
+        .reset_index()
+    )
+
+    aggregated["is_missing"] = aggregated["missing_count"] > 0
+    aggregated.loc[aggregated["sales_amount_jpy"].isna(), "is_missing"] = True
+
+    aggregated["base_product_name"] = aggregated["product_name"]
+    aggregated["channel"] = aggregated["channel"].fillna("全チャネル")
+    aggregated["product_name"] = np.where(
+        aggregated["channel"].eq("全チャネル"),
+        aggregated["base_product_name"],
+        aggregated["base_product_name"] + "｜" + aggregated["channel"],
+    )
+
+    aggregated["product_code_raw"] = aggregated["product_code_raw"].replace("", pd.NA)
+    if aggregated["product_code_raw"].isna().all():
+        unique_names = pd.unique(aggregated["product_name"])
+        code_map = {
+            name: f"P{idx + 1:06d}" for idx, name in enumerate(unique_names)
+        }
+        aggregated["product_code"] = aggregated["product_name"].map(code_map)
+    else:
+        aggregated["product_code"] = aggregated["product_code_raw"].fillna(
+            aggregated["product_name"]
+        )
+        aggregated["product_code"] = aggregated["product_code"].astype(str)
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            aggregated.loc[duplicated_codes, "product_code"] = (
+                aggregated.loc[duplicated_codes, "product_code"]
+                + "｜"
+                + aggregated.loc[duplicated_codes, "channel"]
+            )
+
+    result = aggregated[
+        ["product_code", "product_name", "month", "sales_amount_jpy", "is_missing"]
+    ].copy()
+    result = result.sort_values(["product_code", "month"], ignore_index=True)
+    result["is_missing"] = result["is_missing"].astype(bool)
+
+    return result
 
 
 def fill_missing_months(long_df: pd.DataFrame, policy: str = "zero_fill") -> pd.DataFrame:
