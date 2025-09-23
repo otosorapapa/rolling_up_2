@@ -268,7 +268,11 @@ def _parse_with_mapping(
 def fill_missing_months(long_df: pd.DataFrame, policy: str = "zero_fill") -> pd.DataFrame:
     """
     Ensure every product has every month between global min and max.
-    policy: 'zero_fill' => fill with 0; 'mark_missing' => leave NaN and is_missing=True
+    policy:
+        - 'zero_fill' -> fill gaps with 0
+        - 'forward_fill' -> carry forward the most recent actual value
+        - 'linear_interp' -> interpolate linearly between surrounding actuals
+        - 'mark_missing' -> leave NaN and keep the missing flag
     """
     # Global month range
     min_m = long_df["month"].min()
@@ -281,13 +285,33 @@ def fill_missing_months(long_df: pd.DataFrame, policy: str = "zero_fill") -> pd.
 
     base = base.merge(products, on="product_code", how="left")
     merged = base.merge(long_df, on=["product_code","product_name","month"], how="left")
+    merged["sales_amount_jpy"] = pd.to_numeric(
+        merged["sales_amount_jpy"], errors="coerce"
+    )
+
+    if "is_missing" not in merged:
+        merged["is_missing"] = False
+    merged["is_missing"] = merged["is_missing"].astype("boolean").fillna(False)
+    original_missing = merged["sales_amount_jpy"].isna()
 
     if policy == "zero_fill":
-        merged["is_missing"] = merged["sales_amount_jpy"].isna() | merged["is_missing"].fillna(False)
-        merged["sales_amount_jpy"] = merged["sales_amount_jpy"].fillna(0.0)
+        merged.loc[original_missing, "sales_amount_jpy"] = 0.0
+    elif policy == "forward_fill":
+        merged["sales_amount_jpy"] = (
+            merged.groupby("product_code")["sales_amount_jpy"].ffill()
+        )
+    elif policy == "linear_interp":
+        merged["sales_amount_jpy"] = merged.groupby("product_code")[
+            "sales_amount_jpy"
+        ].transform(lambda s: s.interpolate(method="linear"))
+    elif policy == "mark_missing":
+        # leave NaN values as-is
+        pass
     else:
-        # keep NaN, set is_missing True where NaN
-        merged["is_missing"] = merged["sales_amount_jpy"].isna() | merged["is_missing"].fillna(False)
+        raise ValueError(f"Unknown missing month policy: {policy}")
+
+    merged.loc[original_missing, "is_missing"] = True
+    merged["is_missing"] = merged["is_missing"].astype(bool)
 
     # Order
     merged = merged.sort_values(["product_code","month"], ignore_index=True)

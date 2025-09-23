@@ -2886,13 +2886,36 @@ if page == "データ取込":
     with col_u1:
         file = st.file_uploader("ファイル選択", type=["xlsx", "csv"])
     with col_u2:
+        missing_policy_options = [
+            (
+                "zero_fill",
+                "ゼロ補完（推奨）→ 実売ゼロの欠測に適合 ／ 一時欠測は過小評価の恐れ",
+            ),
+            (
+                "forward_fill",
+                "前月値補完 → トレンド継続を想定 ／ 急激な変化を反映しづらい",
+            ),
+            (
+                "linear_interp",
+                "線形補完 → 前後の値から滑らかに補間 ／ 季節性の山谷が平坦化",
+            ),
+            (
+                "mark_missing",
+                "欠測含む窓は非計上 → 実測値のみで評価 ／ 分析期間が短くなる",
+            ),
+        ]
+        policy_keys = [key for key, _ in missing_policy_options]
+        policy_labels = {key: label for key, label in missing_policy_options}
+        current_policy = st.session_state.settings.get("missing_policy", "zero_fill")
+        try:
+            default_index = policy_keys.index(current_policy)
+        except ValueError:
+            default_index = 0
         st.session_state.settings["missing_policy"] = st.selectbox(
             "欠測月ポリシー",
-            options=["zero_fill", "mark_missing"],
-            format_func=lambda x: (
-                "ゼロ補完(推奨)" if x == "zero_fill" else "欠測含む窓は非計上"
-            ),
-            index=0,
+            options=policy_keys,
+            format_func=lambda x: policy_labels.get(x, x),
+            index=default_index,
         )
 
     if file is not None:
