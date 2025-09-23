@@ -23,14 +23,24 @@ def test_parse_with_mapping_basic():
 
     result = parse_uploaded_table(df, column_mapping=mapping)
 
-    assert set(result.columns) == {
+    expected_cols = {
         "product_code",
         "product_name",
+        "base_product_name",
+        "channel",
+        "category",
+        "customer_segment",
+        "region",
         "month",
         "sales_amount_jpy",
         "is_missing",
     }
+    assert expected_cols.issubset(set(result.columns))
     assert len(result) == 3
+
+    assert set(result["category"].unique()) == {"未分類"}
+    assert set(result["customer_segment"].unique()) == {"全顧客"}
+    assert set(result["region"].unique()) == {"全地域"}
 
     jan_ec = result[(result["product_name"] == "Alpha｜EC") & (result["month"] == "2024-01")]
     assert not jan_ec.empty
@@ -69,6 +79,7 @@ def test_parse_with_mapping_and_product_code_deduplication():
 
     assert sorted(result["product_code"].unique()) == ["SKU1｜EC", "SKU1｜店舗"]
     assert set(result["product_name"].unique()) == {"商品A｜EC", "商品A｜店舗"}
+    assert set(result["channel"].unique()) == {"EC", "店舗"}
     assert result["sales_amount_jpy"].sum() == 350
 
 

@@ -5,6 +5,7 @@ import math
 import re
 import textwrap
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from typing import Optional, List, Dict, Set, Any
 
 import streamlit as st
@@ -95,6 +96,24 @@ UPLOAD_FIELD_DEFS = [
         "description": "SKU コードなどがあれば割当を推奨",
         "required": False,
     },
+    {
+        "key": "category",
+        "label": "商品カテゴリー（任意）",
+        "description": "品目分類・カテゴリ名など",
+        "required": False,
+    },
+    {
+        "key": "customer",
+        "label": "主要顧客（任意）",
+        "description": "主要顧客名または顧客セグメント",
+        "required": False,
+    },
+    {
+        "key": "region",
+        "label": "地域（任意）",
+        "description": "販売地域・エリア名",
+        "required": False,
+    },
 ]
 
 UPLOAD_REQUIRED_KEYS = [field["key"] for field in UPLOAD_FIELD_DEFS if field["required"]]
@@ -105,6 +124,9 @@ UPLOAD_FIELD_KEYWORDS: Dict[str, List[str]] = {
     "product_name": ["商品名", "product", "item", "品名", "sku名", "名称", "name"],
     "sales": ["売上", "sales", "金額", "revenue", "amount", "売上額", "売上高", "net"],
     "product_code": ["商品コード", "sku", "code", "id", "品番", "productcode"],
+    "category": ["カテゴリ", "カテゴリー", "category", "品目", "部門", "分類"],
+    "customer": ["顧客", "customer", "keyaccount", "得意先", "主要顧客", "販社"],
+    "region": ["地域", "リージョン", "region", "エリア", "地方", "ゾーン"],
 }
 
 
@@ -1690,6 +1712,171 @@ def infer_channel_label(name: Optional[str]) -> str:
     return "全チャネル"
 
 
+def shift_year_month(month: Optional[str], offset: int) -> Optional[str]:
+    """Shift a YYYY-MM string by the given number of months."""
+
+    if month is None:
+        return None
+    text = str(month)
+    try:
+        dt = datetime.strptime(text, "%Y-%m")
+    except ValueError:
+        return None
+    shifted = dt + relativedelta(months=offset)
+    return shifted.strftime("%Y-%m")
+
+
+def apply_dimensional_filters(
+    df: Optional[pd.DataFrame], filters: Dict[str, List[str]]
+) -> Optional[pd.DataFrame]:
+    """Filter a dataframe by the provided column -> values mapping."""
+
+    if df is None or df.empty:
+        return df
+    if not filters:
+        return df
+
+    mask = pd.Series(True, index=df.index)
+    for column, selected in filters.items():
+        if not selected:
+            continue
+        if column not in df.columns:
+            continue
+        selected_str = [str(val) for val in selected]
+        mask = mask & df[column].astype(str).isin(selected_str)
+    return df[mask].copy()
+
+
+def compute_segment_summary(
+    year_df: Optional[pd.DataFrame], group_cols: List[str], end_month: str
+) -> pd.DataFrame:
+    """Aggregate year_sum totals and YoY for the specified grouping columns."""
+
+    if year_df is None or year_df.empty:
+        return pd.DataFrame()
+    if isinstance(group_cols, str):
+        group_cols = [group_cols]
+    if not group_cols:
+        return pd.DataFrame()
+
+    missing_cols = [col for col in group_cols if col not in year_df.columns]
+    if missing_cols:
+        return pd.DataFrame()
+
+    snap = (
+        year_df[year_df["month"] == end_month]
+        .dropna(subset=["year_sum"])
+        .copy()
+    )
+    if snap.empty:
+        return pd.DataFrame()
+
+    summary = (
+        snap.groupby(group_cols, dropna=False, as_index=False)["year_sum"].sum()
+        .sort_values("year_sum", ascending=False)
+    )
+    total = float(summary["year_sum"].sum())
+    if total > 0:
+        summary["share"] = summary["year_sum"] / total
+    else:
+        summary["share"] = np.nan
+
+    prev_month = shift_year_month(end_month, -12)
+    if prev_month and (year_df["month"] == prev_month).any():
+        prev = (
+            year_df[year_df["month"] == prev_month]
+            .groupby(group_cols, dropna=False)["year_sum"].sum()
+            .reset_index()
+            .rename(columns={"year_sum": "year_sum_prev"})
+        )
+        summary = summary.merge(prev, on=group_cols, how="left")
+        summary["growth_rate"] = np.where(
+            summary["year_sum_prev"].gt(0),
+            (summary["year_sum"] - summary["year_sum_prev"]) / summary["year_sum_prev"],
+            np.nan,
+        )
+    else:
+        summary["year_sum_prev"] = np.nan
+        summary["growth_rate"] = np.nan
+
+    return summary
+
+
+def render_segment_summary_tab(
+    summary: pd.DataFrame, column: str, label: str, unit: str
+) -> None:
+    """Render a table and scatter chart for a segment summary."""
+
+    if summary is None or summary.empty:
+        st.info(f"{label}のデータが不足しています。")
+        return
+    if column not in summary.columns:
+        st.info(f"{label}情報が存在しません。")
+        return
+
+    work = summary.copy()
+    work = work.rename(columns={column: label})
+
+    scale = UNIT_MAP.get(unit, 1)
+    work[f"年計({unit})"] = work["year_sum"] / scale
+    work["構成比(%)"] = work["share"] * 100
+    work["YoY(%)"] = work["growth_rate"] * 100
+
+    amount_format = "%.0f" if unit == "円" else "%.1f"
+    table_df = work[[label, f"年計({unit})", "構成比(%)", "YoY(%)"]]
+
+    st.dataframe(
+        table_df,
+        use_container_width=True,
+        column_config={
+            f"年計({unit})": st.column_config.NumberColumn(format=amount_format),
+            "構成比(%)": st.column_config.NumberColumn(format="%.1f%%"),
+            "YoY(%)": st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
+
+    chart_df = work[[label, f"年計({unit})", "YoY(%)", "share", "year_sum_prev"]].dropna(
+        subset=[f"年計({unit})"]
+    )
+    chart_df = chart_df.dropna(subset=["YoY(%)"])
+    if chart_df.empty:
+        st.info("YoY を算出できるデータが不足しています。")
+        return
+
+    chart_df = chart_df.rename(columns={f"年計({unit})": "年計値", "YoY(%)": "YoY値"})
+    chart_df["構成比"] = chart_df["share"] * 100
+    if "year_sum_prev" in chart_df.columns:
+        chart_df["前年年計"] = chart_df["year_sum_prev"] / scale
+
+    hover_config: Dict[str, str | bool] = {
+        label: True,
+        "年計値": ":.2f",
+        "YoY値": ":.2f",
+        "構成比": ":.1f%%",
+    }
+    if "前年年計" in chart_df.columns:
+        hover_config["前年年計"] = ":.2f"
+
+    fig = px.scatter(
+        chart_df,
+        x="YoY値",
+        y="年計値",
+        size="構成比",
+        color=label,
+        hover_data=hover_config,
+        size_max=45,
+    )
+    fig.update_traces(marker=dict(opacity=0.85, line=dict(width=0.5, color="#123a5f")))
+    fig.update_layout(
+        height=380,
+        margin=dict(l=10, r=10, t=40, b=20),
+        xaxis_title="YoY(%)",
+        yaxis_title=f"年計({unit})",
+    )
+    fig.add_vline(x=0, line_dash="dash", line_color="#888", opacity=0.6)
+    fig = apply_elegant_theme(fig, theme=st.session_state.get("ui_theme", "dark"))
+    render_plotly_with_spinner(fig, config=PLOTLY_CONFIG)
+
 def _build_kpi_card_css(theme: str) -> str:
     if theme == "dark":
         card_bg = "rgba(17, 24, 38, 0.92)"
@@ -3265,23 +3452,75 @@ elif page == "ダッシュボード":
         }
     )
 
+    year_df_full = st.session_state.data_year
+    monthly_df_full = st.session_state.data_monthly
+
+    filter_dimensions = [
+        ("channel", "チャネル"),
+        ("category", "商品カテゴリー"),
+        ("customer_segment", "主要顧客"),
+    ]
+    filter_cols = st.columns(len(filter_dimensions))
+    selected_filters: Dict[str, List[str]] = {}
+    for idx, (col_key, label) in enumerate(filter_dimensions):
+        default_values = st.session_state.filters.get(col_key, [])
+        options: List[str] = []
+        if year_df_full is not None and col_key in year_df_full.columns:
+            series = year_df_full[col_key].dropna()
+            options = sorted(pd.Series(series).astype(str).unique().tolist())
+            default_values = [value for value in default_values if value in options]
+            with filter_cols[idx]:
+                selected = st.multiselect(
+                    label,
+                    options=options,
+                    default=default_values,
+                    placeholder="選択しない場合は全体",
+                )
+        else:
+            with filter_cols[idx]:
+                st.info(f"{label}情報がありません。")
+            selected = []
+        selected_filters[col_key] = selected
+        st.session_state.filters[col_key] = selected
+
+    active_filters = {k: v for k, v in selected_filters.items() if v}
+    year_df = apply_dimensional_filters(year_df_full, active_filters)
+    monthly_df = apply_dimensional_filters(monthly_df_full, active_filters)
+
+    if active_filters:
+        filter_labels = {
+            "channel": "チャネル",
+            "category": "商品カテゴリー",
+            "customer_segment": "主要顧客",
+        }
+        summary_parts = [
+            f"{filter_labels[key]}: {', '.join(values)}"
+            for key, values in active_filters.items()
+        ]
+        st.caption("適用中のフィルタ ▶ " + " / ".join(summary_parts))
+    else:
+        year_df = year_df_full
+        monthly_df = monthly_df_full
+
+    if year_df is None or year_df.empty:
+        st.warning("選択された条件に合致するデータがありません。フィルタを見直してください。")
+        st.stop()
+
     end_m = sidebar_state.get("dashboard_end_month") or latest_month
 
     # KPIと基礎集計
-    kpi = aggregate_overview(st.session_state.data_year, end_m)
-    hhi = compute_hhi(st.session_state.data_year, end_m)
+    kpi = aggregate_overview(year_df, end_m)
+    hhi = compute_hhi(year_df, end_m)
     unit = st.session_state.settings["currency_unit"]
 
     snap = (
-        st.session_state.data_year[st.session_state.data_year["month"] == end_m]
+        year_df[year_df["month"] == end_m]
         .dropna(subset=["year_sum"])
         .copy()
         .sort_values("year_sum", ascending=False)
     )
 
-    totals = (
-        st.session_state.data_year.groupby("month", as_index=False)["year_sum"].sum()
-    )
+    totals = year_df.groupby("month", as_index=False)["year_sum"].sum()
     totals = totals.sort_values("month").reset_index(drop=True)
     totals["month_dt"] = pd.to_datetime(totals["month"], format="%Y-%m", errors="coerce")
     totals["year_sum_disp"] = totals["year_sum"] / UNIT_MAP[unit]
@@ -3300,10 +3539,8 @@ elif page == "ダッシュボード":
     totals_line_df = totals.dropna(subset=["year_sum_disp", "month_dt"]).copy()
 
     monthly_totals = (
-        st.session_state.data_monthly.groupby("month", as_index=False)[
-            "sales_amount_jpy"
-        ].sum()
-        if st.session_state.data_monthly is not None
+        monthly_df.groupby("month", as_index=False)["sales_amount_jpy"].sum()
+        if monthly_df is not None
         else pd.DataFrame(columns=["month", "sales_amount_jpy"])
     )
     if not monthly_totals.empty:
@@ -3322,24 +3559,21 @@ elif page == "ダッシュボード":
             yoy_chart_df["yoy_pct"] >= 0, "増加", "減少"
         )
 
-    channel_totals = pd.DataFrame(columns=["channel", "year_sum", "share"])
-    total_channel_amount = 0.0
-    if not snap.empty:
-        channel_totals = (
-            snap.assign(channel=snap["product_name"].apply(infer_channel_label))
-            .groupby("channel", as_index=False)["year_sum"].sum()
-            .sort_values("year_sum", ascending=False)
-        )
-        total_channel_amount = float(channel_totals["year_sum"].sum())
-        if total_channel_amount > 0:
-            channel_totals["share"] = (
-                channel_totals["year_sum"] / total_channel_amount
-            )
-        else:
-            channel_totals["share"] = np.nan
+    segment_summaries = {
+        "channel": compute_segment_summary(year_df, ["channel"], end_m),
+        "category": compute_segment_summary(year_df, ["category"], end_m),
+        "customer_segment": compute_segment_summary(year_df, ["customer_segment"], end_m),
+    }
 
-    channel_chart_df = channel_totals.copy()
-    if not channel_chart_df.empty:
+    channel_totals = segment_summaries.get("channel")
+    if channel_totals is None:
+        channel_totals = pd.DataFrame(columns=["channel", "year_sum", "share"])
+    channel_chart_df = pd.DataFrame(columns=["channel", "year_sum", "share"])
+    total_channel_amount = 0.0
+    if not channel_totals.empty and "channel" in channel_totals.columns:
+        channel_chart_df = channel_totals[["channel", "year_sum", "share"]].copy()
+        channel_chart_df = channel_chart_df.sort_values("year_sum", ascending=False)
+        total_channel_amount = float(channel_chart_df["year_sum"].sum())
         if len(channel_chart_df) > 6:
             top_channels = channel_chart_df.head(5)
             others_sum = channel_chart_df.iloc[5:]["year_sum"].sum()
@@ -3360,9 +3594,7 @@ elif page == "ダッシュボード":
                 ignore_index=True,
             )
         if total_channel_amount > 0:
-            channel_chart_df["share"] = (
-                channel_chart_df["year_sum"] / total_channel_amount
-            )
+            channel_chart_df["share"] = channel_chart_df["year_sum"] / total_channel_amount
 
     top_channel_label = "—"
     top_channel_caption = "データ不足"
@@ -3380,6 +3612,11 @@ elif page == "ダッシュボード":
         )
         if share_txt != "—":
             channel_caption_parts.append(f"シェア {share_txt}")
+        growth_txt = format_percent(
+            top_channel_row.get("growth_rate"), decimals=1
+        )
+        if growth_txt != "—":
+            channel_caption_parts.append(f"YoY {growth_txt}")
         if channel_caption_parts:
             top_channel_caption = "\n".join(channel_caption_parts)
         else:
@@ -3585,6 +3822,106 @@ elif page == "ダッシュボード":
                     fig_channel, theme=st.session_state.get("ui_theme", "dark")
                 )
                 render_plotly_with_spinner(fig_channel, config=PLOTLY_CONFIG)
+
+        st.markdown("#### セグメント比較（収益性 × 成長率）")
+        seg_tab_labels = ["チャネル", "商品カテゴリー", "主要顧客"]
+        seg_keys = ["channel", "category", "customer_segment"]
+        seg_tabs = st.tabs(seg_tab_labels)
+        for seg_tab, seg_key, seg_label in zip(seg_tabs, seg_keys, seg_tab_labels):
+            with seg_tab:
+                render_segment_summary_tab(
+                    segment_summaries.get(seg_key, pd.DataFrame()),
+                    seg_key,
+                    seg_label,
+                    unit,
+                )
+        st.caption("バブルの大きさは構成比。0%線より右側は成長、左側は減速領域です。")
+
+        st.markdown("#### ドリルダウン（セグメント ▶ 地域 ▶ 商品）")
+        drill_options = {
+            "チャネル": "channel",
+            "商品カテゴリー": "category",
+            "主要顧客": "customer_segment",
+        }
+        drill_choice = st.selectbox(
+            "ドリルダウン軸",
+            list(drill_options.keys()),
+            key="dashboard_drill_axis",
+        )
+        drill_column = drill_options[drill_choice]
+        drill_base = snap.copy()
+        if drill_base.empty:
+            st.info("対象データが不足しています。フィルタ条件を調整してください。")
+        else:
+            if "region" not in drill_base.columns:
+                drill_base["region"] = "地域情報なし"
+            drill_base["region"] = drill_base["region"].fillna("地域情報なし")
+            if "base_product_name" not in drill_base.columns:
+                drill_base["base_product_name"] = drill_base["product_name"]
+
+            treemap_df = drill_base.rename(
+                columns={
+                    drill_column: drill_choice,
+                    "region": "地域",
+                    "base_product_name": "商品",
+                    "year_sum": "年計",
+                    "yoy": "YoY",
+                }
+            )
+            treemap_df["商品"] = treemap_df["商品"].fillna("無名商品")
+            treemap_df[drill_choice] = treemap_df[drill_choice].fillna("未分類")
+            treemap_df["地域"] = treemap_df["地域"].fillna("地域情報なし")
+            fig_treemap = px.treemap(
+                treemap_df,
+                path=[drill_choice, "地域", "商品"],
+                values="年計",
+                color="YoY",
+                color_continuous_scale="RdYlGn",
+                color_continuous_midpoint=0,
+            )
+            fig_treemap.update_layout(height=420, margin=dict(l=10, r=10, t=40, b=10))
+            fig_treemap = apply_elegant_theme(
+                fig_treemap, theme=st.session_state.get("ui_theme", "dark")
+            )
+            render_plotly_with_spinner(fig_treemap, config=PLOTLY_CONFIG)
+            st.caption("セルをクリックで下位階層にズーム。ダブルクリックで一段階戻れます。")
+
+            region_summary = compute_segment_summary(
+                year_df, [drill_column, "region"], end_m
+            )
+            if region_summary.empty:
+                st.info("地域別の要因分析に必要なデータが不足しています。")
+            else:
+                display_region = region_summary.rename(
+                    columns={drill_column: drill_choice, "region": "地域"}
+                )
+                display_region[f"年計({unit})"] = (
+                    display_region["year_sum"] / UNIT_MAP[unit]
+                )
+                display_region["構成比(%)"] = display_region["share"] * 100
+                display_region["YoY(%)"] = display_region["growth_rate"] * 100
+                display_region = display_region.sort_values(
+                    "year_sum", ascending=False
+                )
+                st.dataframe(
+                    display_region[
+                        [
+                            drill_choice,
+                            "地域",
+                            f"年計({unit})",
+                            "構成比(%)",
+                            "YoY(%)",
+                        ]
+                    ].head(20),
+                    use_container_width=True,
+                    column_config={
+                        f"年計({unit})": st.column_config.NumberColumn(
+                            format="%.0f" if unit == "円" else "%.1f"
+                        ),
+                        "構成比(%)": st.column_config.NumberColumn(format="%.1f%%"),
+                        "YoY(%)": st.column_config.NumberColumn(format="%.1f%%"),
+                    },
+                )
 
     with tab_ranking:
         st.markdown(f"#### ランキング（{end_m} 時点 年計）")

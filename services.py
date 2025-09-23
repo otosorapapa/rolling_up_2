@@ -150,6 +150,9 @@ def _parse_with_mapping(
     sales_col = mapping["sales"]
     channel_col = mapping.get("channel")
     code_col = mapping.get("product_code")
+    category_col = mapping.get("category")
+    customer_col = mapping.get("customer")
+    region_col = mapping.get("region")
 
     if (
         month_col not in work.columns
@@ -182,6 +185,23 @@ def _parse_with_mapping(
     else:
         channel_series = pd.Series(["全チャネル"] * len(work), index=work.index)
 
+    def _prepare_text_series(column: Optional[str], default: str) -> pd.Series:
+        if column and column in work.columns:
+            series = (
+                work[column]
+                .fillna("")
+                .astype(str)
+                .str.strip()
+            )
+            series = series.replace("", default)
+        else:
+            series = pd.Series([default] * len(work), index=work.index)
+        return series
+
+    category_series = _prepare_text_series(category_col, "未分類")
+    customer_series = _prepare_text_series(customer_col, "全顧客")
+    region_series = _prepare_text_series(region_col, "全地域")
+
     sales_numeric = pd.to_numeric(work[sales_col], errors="coerce")
     missing_sales = sales_numeric.isna()
 
@@ -203,6 +223,9 @@ def _parse_with_mapping(
             "product_code_raw": code_series,
             "sales_amount_jpy": sales_numeric,
             "had_missing": missing_sales,
+            "category": category_series,
+            "customer_segment": customer_series,
+            "region": region_series,
         }
     )
 
@@ -214,7 +237,15 @@ def _parse_with_mapping(
 
     aggregated = (
         table.groupby(
-            ["channel", "product_name", "product_code_raw", "month"],
+            [
+                "channel",
+                "product_name",
+                "product_code_raw",
+                "category",
+                "customer_segment",
+                "region",
+                "month",
+            ],
             dropna=False,
             sort=False,
         )
@@ -230,6 +261,9 @@ def _parse_with_mapping(
 
     aggregated["base_product_name"] = aggregated["product_name"]
     aggregated["channel"] = aggregated["channel"].fillna("全チャネル")
+    aggregated["category"] = aggregated["category"].fillna("未分類")
+    aggregated["customer_segment"] = aggregated["customer_segment"].fillna("全顧客")
+    aggregated["region"] = aggregated["region"].fillna("全地域")
     aggregated["product_name"] = np.where(
         aggregated["channel"].eq("全チャネル"),
         aggregated["base_product_name"],
@@ -255,10 +289,50 @@ def _parse_with_mapping(
                 + "｜"
                 + aggregated.loc[duplicated_codes, "channel"]
             )
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            for suffix_col in ["region", "customer_segment", "category"]:
+                if not duplicated_codes.any():
+                    break
+                if suffix_col not in aggregated.columns:
+                    continue
+                aggregated.loc[duplicated_codes, "product_code"] = aggregated.loc[
+                    duplicated_codes
+                ].apply(
+                    lambda row: (
+                        row["product_code"]
+                        + "｜"
+                        + value
+                        if (value := str(row[suffix_col]).strip())
+                        and value.lower() not in {"nan", "none"}
+                        else row["product_code"]
+                    ),
+                    axis=1,
+                )
+                duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            seq = aggregated.groupby("product_code").cumcount().astype(str)
+            aggregated.loc[duplicated_codes, "product_code"] = (
+                aggregated.loc[duplicated_codes, "product_code"]
+                + "｜"
+                + seq[duplicated_codes]
+            )
 
-    result = aggregated[
-        ["product_code", "product_name", "month", "sales_amount_jpy", "is_missing"]
-    ].copy()
+    result_columns = [
+        "product_code",
+        "product_name",
+        "base_product_name",
+        "channel",
+        "category",
+        "customer_segment",
+        "region",
+        "month",
+        "sales_amount_jpy",
+        "is_missing",
+    ]
+    available_cols = [col for col in result_columns if col in aggregated.columns]
+    result = aggregated[available_cols].copy()
     result = result.sort_values(["product_code", "month"], ignore_index=True)
     result["is_missing"] = result["is_missing"].astype(bool)
 
@@ -279,12 +353,31 @@ def fill_missing_months(long_df: pd.DataFrame, policy: str = "zero_fill") -> pd.
     max_m = long_df["month"].max()
     all_months = month_range(min_m, max_m)
 
-    products = long_df[["product_code","product_name"]].drop_duplicates()
-    idx = pd.MultiIndex.from_product([products["product_code"], all_months], names=["product_code","month"])
+    meta_cols = [
+        col
+        for col in long_df.columns
+        if col
+        not in {
+            "product_code",
+            "month",
+            "sales_amount_jpy",
+            "is_missing",
+        }
+    ]
+    products = long_df[["product_code"] + meta_cols].drop_duplicates(
+        subset=["product_code"]
+    )
+    idx = pd.MultiIndex.from_product(
+        [products["product_code"], all_months], names=["product_code", "month"]
+    )
     base = pd.DataFrame(index=idx).reset_index()
-
     base = base.merge(products, on="product_code", how="left")
-    merged = base.merge(long_df, on=["product_code","product_name","month"], how="left")
+    value_cols = [
+        col
+        for col in ["product_code", "month", "sales_amount_jpy", "is_missing"]
+        if col in long_df.columns
+    ]
+    merged = base.merge(long_df[value_cols], on=["product_code", "month"], how="left")
     merged["sales_amount_jpy"] = pd.to_numeric(
         merged["sales_amount_jpy"], errors="coerce"
     )
@@ -365,6 +458,20 @@ def compute_year_rolling(long_df: pd.DataFrame, window: int = 12, policy: str = 
             "delta": delta,
             "yoy": yoy
         })
+        meta_cols = [
+            col
+            for col in g.columns
+            if col
+            not in {
+                "product_code",
+                "product_name",
+                "month",
+                "sales_amount_jpy",
+                "is_missing",
+            }
+        ]
+        for col in meta_cols:
+            tmp[col] = g[col].iloc[0]
         out_list.append(tmp)
 
     year_df = pd.concat(out_list, ignore_index=True)
