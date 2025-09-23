@@ -2,7 +2,6 @@ import html
 import io
 import json
 import math
-from collections import Counter
 import re
 import textwrap
 from datetime import datetime
@@ -671,7 +670,6 @@ def _ai_anomaly_report(df: pd.DataFrame) -> str:
 
 
 from services import (
-    DataQualityIssue,
     parse_uploaded_table,
     fill_missing_months,
     compute_year_rolling,
@@ -690,7 +688,6 @@ from services import (
     slopes_snapshot,
     shape_flags,
     detect_linear_anomalies,
-    detect_data_quality_issues,
 )
 from sample_data import load_sample_dataset
 from core.chart_card import toolbar_sku_detail, build_chart_card
@@ -2980,84 +2977,8 @@ if page == "データ取込":
             summary_rows.append({"必要項目": field["label"], "割当列": display_value})
 
         st.table(pd.DataFrame(summary_rows))
-
-        quality_issues: List[DataQualityIssue] = []
-
         if missing_required:
             st.warning("未割当の必須項目があります: " + ", ".join(missing_required))
-            st.info("必須項目の割当後にデータ品質チェックが実行されます。")
-        else:
-            st.subheader("データ品質チェック")
-            quality_issues = detect_data_quality_issues(df_raw, column_mapping)
-            if quality_issues:
-                st.warning(
-                    f"{len(quality_issues)} 件の修正候補が見つかりました。CSVの該当行を確認してください。"
-                )
-
-                issue_type_labels = {
-                    "missing_month": "欠損値",
-                    "invalid_month": "形式エラー",
-                    "missing_product_name": "欠損値",
-                    "missing_channel": "欠損値",
-                    "missing_sales": "欠損値",
-                    "non_numeric_sales": "形式エラー",
-                    "negative_sales": "異常値",
-                }
-
-                def _format_value(value: object) -> str:
-                    if value is None:
-                        return ""
-                    if isinstance(value, (float, np.floating)):
-                        if np.isnan(value):
-                            return ""
-                        text = f"{float(value):,.2f}"
-                        return text.rstrip("0").rstrip(".")
-                    if isinstance(value, (int, np.integer)):
-                        return f"{int(value):,}"
-                    return str(value)
-
-                issue_rows = []
-                for issue in quality_issues:
-                    type_label = issue_type_labels.get(issue.issue_type, issue.issue_type)
-                    issue_rows.append(
-                        {
-                            "CSV行": issue.row_number,
-                            "列": issue.column,
-                            "種別": type_label,
-                            "エラー内容": issue.message,
-                            "推奨対応": issue.suggestion,
-                            "候補値": _format_value(issue.suggested_value),
-                            "元の値": _format_value(issue.original_value),
-                        }
-                    )
-
-                issue_df = pd.DataFrame(issue_rows)
-                issue_df = issue_df.sort_values(["CSV行", "列", "種別"], ignore_index=True)
-                max_display = 200
-                display_df = issue_df.head(max_display)
-                base_height = 64
-                row_height = 28
-                height = base_height + len(display_df) * row_height
-                height = max(160, min(520, height))
-                st.dataframe(display_df, use_container_width=True, height=height)
-                if len(issue_df) > max_display:
-                    st.caption(
-                        (
-                            f"先頭 {max_display} 件を表示しています。"
-                            f"残り {len(issue_df) - max_display} 件はファイル側で修正してください。"
-                        )
-                    )
-
-                type_counts = Counter(issue.issue_type for issue in quality_issues)
-                if type_counts:
-                    summary_parts = []
-                    for issue_type, count in type_counts.most_common():
-                        label = issue_type_labels.get(issue_type, issue_type)
-                        summary_parts.append(f"{label}: {count}件")
-                    st.caption("種別内訳: " + " / ".join(summary_parts))
-                st.caption("CSV行番号はヘッダー行を1としてカウントしています。")
-            else:
-                st.success("重大なデータ品質の問題は見つかりませんでした。")
 
         convert_disabled = bool(missing_required)
         convert_help = (
@@ -3093,16 +3014,7 @@ if page == "データ取込":
                     "取込完了。ダッシュボードへ移動して可視化を確認してください。"
                 )
 
-                st.subheader("データ品質サマリー")
-                if quality_issues:
-                    st.warning(
-                        (
-                            f"データ品質チェックで {len(quality_issues)} 件の確認事項が見つかりました。"
-                            "CSVを修正して再取込すると分析精度が向上します。"
-                        )
-                    )
-                else:
-                    st.info("データ品質チェックで重大な問題は見つかりませんでした。")
+                st.subheader("品質チェック（欠測月/非数値/重複）")
                 # 欠測月
                 miss_rate = (long_df["is_missing"].sum(), len(long_df))
                 st.write(f"- 欠測セル数: {miss_rate[0]:,} / {miss_rate[1]:,}")
