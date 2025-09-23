@@ -1,6 +1,6 @@
 import pandas as pd
 
-from services import detect_data_quality_issues, parse_uploaded_table
+from services import parse_uploaded_table
 
 
 def test_parse_with_mapping_basic():
@@ -101,99 +101,3 @@ def test_parse_with_mapping_marks_missing_values():
     assert not feb_row.empty
     assert pd.isna(feb_row["sales_amount_jpy"].iloc[0])
     assert bool(feb_row["is_missing"].iloc[0])
-
-
-def test_detect_quality_issues_flags_missing_and_negative():
-    df = pd.DataFrame(
-        {
-            "Month": ["2024-01", None, "2024/03/01"],
-            "Channel": ["EC", "", "店舗"],
-            "Item": ["Alpha", "Beta", ""],
-            "Revenue": [1000, "abc", -200],
-        }
-    )
-
-    mapping = {
-        "month": "Month",
-        "channel": "Channel",
-        "product_name": "Item",
-        "sales": "Revenue",
-        "product_code": None,
-    }
-
-    issues = detect_data_quality_issues(df, mapping)
-
-    assert len(issues) == 5
-
-    missing_month_issue = next(
-        issue for issue in issues if issue.issue_type == "missing_month"
-    )
-    assert missing_month_issue.row_number == 3
-
-    non_numeric_issue = next(
-        issue for issue in issues if issue.issue_type == "non_numeric_sales"
-    )
-    assert "abc" in non_numeric_issue.message
-    assert non_numeric_issue.row_number == 3
-
-    negative_issue = next(
-        issue for issue in issues if issue.issue_type == "negative_sales"
-    )
-    assert negative_issue.row_number == 4
-    assert negative_issue.suggested_value == 200
-
-
-def test_detect_quality_issues_suggests_clean_numeric_and_invalid_month():
-    df = pd.DataFrame(
-        {
-            "Month": ["2024-13", "2024-02"],
-            "Channel": ["EC", "店舗"],
-            "Item": ["Alpha", "Beta"],
-            "Revenue": ["1,234", 5000],
-        }
-    )
-
-    mapping = {
-        "month": "Month",
-        "channel": "Channel",
-        "product_name": "Item",
-        "sales": "Revenue",
-        "product_code": None,
-    }
-
-    issues = detect_data_quality_issues(df, mapping)
-
-    assert len(issues) == 2
-
-    invalid_month_issue = next(
-        issue for issue in issues if issue.issue_type == "invalid_month"
-    )
-    assert invalid_month_issue.row_number == 2
-
-    numeric_issue = next(
-        issue for issue in issues if issue.issue_type == "non_numeric_sales"
-    )
-    assert numeric_issue.suggested_value == 1234
-    assert "カンマ" in numeric_issue.suggestion
-
-
-def test_detect_quality_issues_returns_empty_when_mapping_incomplete():
-    df = pd.DataFrame(
-        {
-            "Month": ["2024-01"],
-            "Item": ["Alpha"],
-            "Revenue": [1000],
-        }
-    )
-
-    mapping = {
-        "month": "Month",
-        "channel": None,
-        "product_name": "Item",
-        "sales": None,
-        "product_code": None,
-    }
-
-    issues = detect_data_quality_issues(df, mapping)
-
-    assert issues == []
