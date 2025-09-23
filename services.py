@@ -55,6 +55,152 @@ def month_range(min_m: str, max_m: str) -> List[str]:
     return out
 
 
+# ---------- Internal helpers ----------
+def _prepare_text_series(
+    work: pd.DataFrame, column: Optional[str], default: str
+) -> pd.Series:
+    if column and column in work.columns:
+        series = work[column].fillna("").astype(str).str.strip()
+        return series.replace("", default)
+    return pd.Series([default] * len(work), index=work.index)
+
+
+def _prepare_channel_series(work: pd.DataFrame, column: Optional[str]) -> pd.Series:
+    if column and column in work.columns:
+        series = work[column].fillna("全チャネル").astype(str).str.strip()
+        return series.replace("", "全チャネル")
+    return pd.Series(["全チャネル"] * len(work), index=work.index)
+
+
+def _prepare_code_series(work: pd.DataFrame, column: Optional[str]) -> pd.Series:
+    if column and column in work.columns:
+        series = work[column].astype(str).str.strip()
+        return series.replace({"nan": "", "NaN": ""})
+    return pd.Series([""] * len(work), index=work.index)
+
+
+def _aggregate_parsed_table(table: pd.DataFrame) -> pd.DataFrame:
+    def _sum_numeric(series: pd.Series) -> float:
+        valid = series.dropna()
+        if valid.empty:
+            return np.nan
+        return float(valid.sum())
+
+    aggregated = (
+        table.groupby(
+            [
+                "channel",
+                "product_name",
+                "product_code_raw",
+                "category",
+                "customer_segment",
+                "region",
+                "month",
+            ],
+            dropna=False,
+            sort=False,
+        )
+        .agg(
+            sales_amount_jpy=("sales_amount_jpy", _sum_numeric),
+            missing_count=("had_missing", "sum"),
+        )
+        .reset_index()
+    )
+
+    aggregated["is_missing"] = aggregated["missing_count"] > 0
+    aggregated.loc[aggregated["sales_amount_jpy"].isna(), "is_missing"] = True
+
+    aggregated["base_product_name"] = aggregated["product_name"]
+    aggregated["channel"] = aggregated["channel"].fillna("全チャネル")
+    aggregated["category"] = aggregated["category"].fillna("未分類")
+    aggregated["customer_segment"] = aggregated["customer_segment"].fillna("全顧客")
+    aggregated["region"] = aggregated["region"].fillna("全地域")
+    aggregated["product_name"] = np.where(
+        aggregated["channel"].eq("全チャネル"),
+        aggregated["base_product_name"],
+        aggregated["base_product_name"] + "｜" + aggregated["channel"],
+    )
+
+    aggregated["product_code_raw"] = aggregated["product_code_raw"].replace("", pd.NA)
+    if aggregated["product_code_raw"].isna().all():
+        unique_names = pd.unique(aggregated["product_name"])
+        code_map = {name: f"P{idx + 1:06d}" for idx, name in enumerate(unique_names)}
+        aggregated["product_code"] = aggregated["product_name"].map(code_map)
+    else:
+        aggregated["product_code"] = aggregated["product_code_raw"].fillna(
+            aggregated["product_name"]
+        )
+        aggregated["product_code"] = aggregated["product_code"].astype(str)
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            aggregated.loc[duplicated_codes, "product_code"] = (
+                aggregated.loc[duplicated_codes, "product_code"]
+                + "｜"
+                + aggregated.loc[duplicated_codes, "channel"]
+            )
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            for suffix_col in ["region", "customer_segment", "category"]:
+                if not duplicated_codes.any():
+                    break
+                if suffix_col not in aggregated.columns:
+                    continue
+                aggregated.loc[duplicated_codes, "product_code"] = aggregated.loc[
+                    duplicated_codes
+                ].apply(
+                    lambda row: (
+                        row["product_code"]
+                        + "｜"
+                        + value
+                        if (value := str(row[suffix_col]).strip())
+                        and value.lower() not in {"nan", "none"}
+                        else row["product_code"]
+                    ),
+                    axis=1,
+                )
+                duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
+        if duplicated_codes.any():
+            seq = aggregated.groupby("product_code").cumcount().astype(str)
+            aggregated.loc[duplicated_codes, "product_code"] = (
+                aggregated.loc[duplicated_codes, "product_code"]
+                + "｜"
+                + seq[duplicated_codes]
+            )
+
+    result_columns = [
+        "product_code",
+        "product_name",
+        "base_product_name",
+        "channel",
+        "category",
+        "customer_segment",
+        "region",
+        "month",
+        "sales_amount_jpy",
+        "is_missing",
+    ]
+    available_cols = [col for col in result_columns if col in aggregated.columns]
+    result = aggregated[available_cols].copy()
+    result = result.sort_values(["product_code", "month"], ignore_index=True)
+    result["is_missing"] = result["is_missing"].astype(bool)
+
+    return result
+
+
+def _extract_month_label(column: object) -> Optional[str]:
+    if isinstance(column, tuple):
+        candidates = [level for level in column if level not in (None, "")]
+    else:
+        candidates = [column]
+    for candidate in candidates:
+        try:
+            return normalize_month_key(candidate)
+        except Exception:
+            continue
+    return None
+
+
 # ---------- Parsing & Normalization ----------
 def parse_uploaded_table(
     df: pd.DataFrame,
@@ -67,7 +213,16 @@ def parse_uploaded_table(
     Returns long df: ['product_code','product_name','month','sales_amount_jpy']
     """
     if column_mapping:
-        return _parse_with_mapping(df, column_mapping)
+        month_col = column_mapping.get("month") if isinstance(column_mapping, dict) else None
+        sales_col = column_mapping.get("sales") if isinstance(column_mapping, dict) else None
+        if (
+            month_col
+            and sales_col
+            and month_col in df.columns
+            and sales_col in df.columns
+        ):
+            return _parse_with_mapping(df, column_mapping)
+        return _parse_wide_with_mapping(df, column_mapping)
 
     cols = list(df.columns)
     # Auto-detect product name column if not provided: first column
@@ -166,54 +321,14 @@ def _parse_with_mapping(
         raise ValueError("有効な月度データが見つかりませんでした。")
 
     month_series = work[month_col].apply(normalize_month_key)
-    product_series = (
-        work[product_col]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .replace("", "未設定商品")
-    )
-
-    if channel_col and channel_col in work.columns:
-        channel_series = (
-            work[channel_col]
-            .fillna("全チャネル")
-            .astype(str)
-            .str.strip()
-            .replace("", "全チャネル")
-        )
-    else:
-        channel_series = pd.Series(["全チャネル"] * len(work), index=work.index)
-
-    def _prepare_text_series(column: Optional[str], default: str) -> pd.Series:
-        if column and column in work.columns:
-            series = (
-                work[column]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-            )
-            series = series.replace("", default)
-        else:
-            series = pd.Series([default] * len(work), index=work.index)
-        return series
-
-    category_series = _prepare_text_series(category_col, "未分類")
-    customer_series = _prepare_text_series(customer_col, "全顧客")
-    region_series = _prepare_text_series(region_col, "全地域")
-
+    product_series = _prepare_text_series(work, product_col, "未設定商品")
+    channel_series = _prepare_channel_series(work, channel_col)
+    category_series = _prepare_text_series(work, category_col, "未分類")
+    customer_series = _prepare_text_series(work, customer_col, "全顧客")
+    region_series = _prepare_text_series(work, region_col, "全地域")
     sales_numeric = pd.to_numeric(work[sales_col], errors="coerce")
     missing_sales = sales_numeric.isna()
-
-    if code_col and code_col in work.columns:
-        code_series = (
-            work[code_col]
-            .astype(str)
-            .str.strip()
-            .replace({"nan": "", "NaN": ""})
-        )
-    else:
-        code_series = pd.Series([""] * len(work), index=work.index)
+    code_series = _prepare_code_series(work, code_col)
 
     table = pd.DataFrame(
         {
@@ -229,114 +344,110 @@ def _parse_with_mapping(
         }
     )
 
-    def _sum_numeric(series: pd.Series) -> float:
-        valid = series.dropna()
-        if valid.empty:
-            return np.nan
-        return float(valid.sum())
+    return _aggregate_parsed_table(table)
 
-    aggregated = (
-        table.groupby(
-            [
-                "channel",
-                "product_name",
-                "product_code_raw",
-                "category",
-                "customer_segment",
-                "region",
-                "month",
-            ],
-            dropna=False,
-            sort=False,
-        )
-        .agg(
-            sales_amount_jpy=("sales_amount_jpy", _sum_numeric),
-            missing_count=("had_missing", "sum"),
-        )
-        .reset_index()
-    )
 
-    aggregated["is_missing"] = aggregated["missing_count"] > 0
-    aggregated.loc[aggregated["sales_amount_jpy"].isna(), "is_missing"] = True
+def _parse_wide_with_mapping(
+    df: pd.DataFrame, mapping: Dict[str, Optional[str]]
+) -> pd.DataFrame:
+    if df.empty:
+        raise ValueError("データが空です。")
 
-    aggregated["base_product_name"] = aggregated["product_name"]
-    aggregated["channel"] = aggregated["channel"].fillna("全チャネル")
-    aggregated["category"] = aggregated["category"].fillna("未分類")
-    aggregated["customer_segment"] = aggregated["customer_segment"].fillna("全顧客")
-    aggregated["region"] = aggregated["region"].fillna("全地域")
-    aggregated["product_name"] = np.where(
-        aggregated["channel"].eq("全チャネル"),
-        aggregated["base_product_name"],
-        aggregated["base_product_name"] + "｜" + aggregated["channel"],
-    )
-
-    aggregated["product_code_raw"] = aggregated["product_code_raw"].replace("", pd.NA)
-    if aggregated["product_code_raw"].isna().all():
-        unique_names = pd.unique(aggregated["product_name"])
-        code_map = {
-            name: f"P{idx + 1:06d}" for idx, name in enumerate(unique_names)
-        }
-        aggregated["product_code"] = aggregated["product_name"].map(code_map)
-    else:
-        aggregated["product_code"] = aggregated["product_code_raw"].fillna(
-            aggregated["product_name"]
-        )
-        aggregated["product_code"] = aggregated["product_code"].astype(str)
-        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
-        if duplicated_codes.any():
-            aggregated.loc[duplicated_codes, "product_code"] = (
-                aggregated.loc[duplicated_codes, "product_code"]
-                + "｜"
-                + aggregated.loc[duplicated_codes, "channel"]
-            )
-        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
-        if duplicated_codes.any():
-            for suffix_col in ["region", "customer_segment", "category"]:
-                if not duplicated_codes.any():
-                    break
-                if suffix_col not in aggregated.columns:
-                    continue
-                aggregated.loc[duplicated_codes, "product_code"] = aggregated.loc[
-                    duplicated_codes
-                ].apply(
-                    lambda row: (
-                        row["product_code"]
-                        + "｜"
-                        + value
-                        if (value := str(row[suffix_col]).strip())
-                        and value.lower() not in {"nan", "none"}
-                        else row["product_code"]
-                    ),
-                    axis=1,
-                )
-                duplicated_codes = aggregated["product_code"].duplicated(keep=False)
-        duplicated_codes = aggregated["product_code"].duplicated(keep=False)
-        if duplicated_codes.any():
-            seq = aggregated.groupby("product_code").cumcount().astype(str)
-            aggregated.loc[duplicated_codes, "product_code"] = (
-                aggregated.loc[duplicated_codes, "product_code"]
-                + "｜"
-                + seq[duplicated_codes]
-            )
-
-    result_columns = [
-        "product_code",
-        "product_name",
-        "base_product_name",
-        "channel",
-        "category",
-        "customer_segment",
-        "region",
-        "month",
-        "sales_amount_jpy",
-        "is_missing",
+    metadata_keys = [
+        ("product_name", "未設定商品"),
+        ("channel", "全チャネル"),
+        ("product_code", ""),
+        ("category", "未分類"),
+        ("customer", "全顧客"),
+        ("region", "全地域"),
     ]
-    available_cols = [col for col in result_columns if col in aggregated.columns]
-    result = aggregated[available_cols].copy()
-    result = result.sort_values(["product_code", "month"], ignore_index=True)
-    result["is_missing"] = result["is_missing"].astype(bool)
 
-    return result
+    for key, column in mapping.items():
+        if key in {"month", "sales"}:
+            continue
+        if column is None:
+            continue
+        if column not in df.columns:
+            raise ValueError(f"列 '{column}' がファイル内に見つかりません。")
+
+    product_col = mapping.get("product_name")
+    if product_col is None:
+        product_col = df.columns[0]
+    elif product_col not in df.columns:
+        raise ValueError(f"列 '{product_col}' がファイル内に見つかりません。")
+
+    id_vars: List[object] = []
+    if product_col not in id_vars:
+        id_vars.append(product_col)
+
+    meta_cols: Dict[str, Optional[object]] = {}
+    for key, _ in metadata_keys[1:]:
+        column = mapping.get(key)
+        if column is not None and column not in df.columns:
+            raise ValueError(f"列 '{column}' がファイル内に見つかりません。")
+        meta_cols[key] = column
+        if column is not None and column not in id_vars:
+            id_vars.append(column)
+
+    month_map: Dict[object, str] = {}
+    for col in df.columns:
+        if col in id_vars:
+            continue
+        label = _extract_month_label(col)
+        if label is None:
+            continue
+        month_map[col] = label
+
+    if not month_map:
+        raise ValueError("月度列が自動検出できませんでした。")
+
+    value_vars = list(month_map.keys())
+    wide_melted = df.melt(
+        id_vars=id_vars,
+        value_vars=value_vars,
+        var_name="_month_col",
+        value_name="sales_amount_jpy",
+    )
+
+    wide_melted["month"] = wide_melted["_month_col"].map(month_map)
+    wide_melted = wide_melted.drop(columns="_month_col")
+    wide_melted = wide_melted[wide_melted["month"].notna()].copy()
+
+    if wide_melted.empty:
+        raise ValueError("有効な月度データが見つかりませんでした。")
+
+    wide_melted["month"] = wide_melted["month"].apply(normalize_month_key)
+
+    product_series = _prepare_text_series(wide_melted, product_col, "未設定商品")
+    channel_series = _prepare_channel_series(wide_melted, meta_cols.get("channel"))
+    category_series = _prepare_text_series(
+        wide_melted, meta_cols.get("category"), "未分類"
+    )
+    customer_series = _prepare_text_series(
+        wide_melted, meta_cols.get("customer"), "全顧客"
+    )
+    region_series = _prepare_text_series(
+        wide_melted, meta_cols.get("region"), "全地域"
+    )
+    code_series = _prepare_code_series(wide_melted, meta_cols.get("product_code"))
+    sales_numeric = pd.to_numeric(wide_melted["sales_amount_jpy"], errors="coerce")
+    missing_sales = sales_numeric.isna()
+
+    table = pd.DataFrame(
+        {
+            "month": wide_melted["month"],
+            "channel": channel_series,
+            "product_name": product_series,
+            "product_code_raw": code_series,
+            "sales_amount_jpy": sales_numeric,
+            "had_missing": missing_sales,
+            "category": category_series,
+            "customer_segment": customer_series,
+            "region": region_series,
+        }
+    )
+
+    return _aggregate_parsed_table(table)
 
 
 def fill_missing_months(long_df: pd.DataFrame, policy: str = "zero_fill") -> pd.DataFrame:
