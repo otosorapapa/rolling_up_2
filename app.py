@@ -2,9 +2,10 @@ import html
 import io
 import json
 import math
+import re
 import textwrap
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -61,6 +62,576 @@ PLOTLY_CONFIG = {
     "toImageButtonOptions": {"format": "png", "filename": "年計比較"},
 }
 PLOTLY_CONFIG["locale"] = "ja" if current_language == "ja" else "en"
+
+
+UPLOAD_FIELD_DEFS = [
+    {
+        "key": "month",
+        "label": "年月",
+        "description": "YYYY-MM 形式（例: 2024-01）",
+        "required": True,
+    },
+    {
+        "key": "channel",
+        "label": "チャネル",
+        "description": "販路・流通区分（例: EC, 店舗）",
+        "required": True,
+    },
+    {
+        "key": "product_name",
+        "label": "商品名",
+        "description": "商品を識別できる名称",
+        "required": True,
+    },
+    {
+        "key": "sales",
+        "label": "売上額",
+        "description": "数値（円）",
+        "required": True,
+    },
+    {
+        "key": "product_code",
+        "label": "商品コード（任意）",
+        "description": "SKU コードなどがあれば割当を推奨",
+        "required": False,
+    },
+]
+
+UPLOAD_REQUIRED_KEYS = [field["key"] for field in UPLOAD_FIELD_DEFS if field["required"]]
+
+UPLOAD_FIELD_KEYWORDS: Dict[str, List[str]] = {
+    "month": ["年月", "yearmonth", "ym", "month", "date", "期間", "会計月"],
+    "channel": ["チャネル", "channel", "販路", "流通", "店舗区分", "経路"],
+    "product_name": ["商品名", "product", "item", "品名", "sku名", "名称", "name"],
+    "sales": ["売上", "sales", "金額", "revenue", "amount", "売上額", "売上高", "net"],
+    "product_code": ["商品コード", "sku", "code", "id", "品番", "productcode"],
+}
+
+
+def _normalize_header(label: object) -> str:
+    text = str(label).strip().lower()
+    for src, dst in (("（", "("), ("）", ")"), ("　", " ")):
+        text = text.replace(src, dst)
+    text = re.sub(r"[\s_/\\-]", "", text)
+    return text
+
+
+def _looks_like_month(value: object) -> bool:
+    if pd.isna(value):
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    patterns = [
+        r"^\d{4}[-/]?(0[1-9]|1[0-2])$",
+        r"^\d{4}[-/]?(0[1-9]|1[0-2])[-/]?(0[1-9]|[12]\d|3[01])$",
+    ]
+    return any(re.match(pattern, text) for pattern in patterns)
+
+
+def suggest_column_mapping(df: pd.DataFrame) -> Dict[str, Optional[str]]:
+    columns = list(df.columns)
+    normalized = {col: _normalize_header(col) for col in columns}
+    suggestions: Dict[str, Optional[str]] = {field["key"]: None for field in UPLOAD_FIELD_DEFS}
+    used: Set[object] = set()
+
+    # Prefer datetime-like columns for month detection
+    for col in columns:
+        if col in used:
+            continue
+        series = df[col]
+        if pd.api.types.is_datetime64_any_dtype(series) or pd.api.types.is_period_dtype(series):
+            suggestions["month"] = col
+            used.add(col)
+            break
+
+    for field in UPLOAD_FIELD_DEFS:
+        key = field["key"]
+        if suggestions.get(key):
+            continue
+        keywords = UPLOAD_FIELD_KEYWORDS.get(key, [])
+        for exact in (True, False):
+            selected: Optional[object] = None
+            for kw in keywords:
+                kw_norm = _normalize_header(kw)
+                for col in columns:
+                    if col in used:
+                        continue
+                    norm_label = normalized[col]
+                    if exact:
+                        if norm_label == kw_norm:
+                            selected = col
+                            break
+                    else:
+                        if kw_norm and kw_norm in norm_label:
+                            selected = col
+                            break
+                if selected is not None:
+                    break
+            if selected is not None:
+                suggestions[key] = selected
+                used.add(selected)
+                break
+
+    if suggestions.get("month") is None:
+        for col in columns:
+            if col in used:
+                continue
+            sample = df[col].dropna().head(6)
+            if not sample.empty and sample.apply(_looks_like_month).all():
+                suggestions["month"] = col
+                used.add(col)
+                break
+
+    if suggestions.get("sales") is None:
+        numeric_candidates = [
+            col
+            for col in columns
+            if col not in used and pd.api.types.is_numeric_dtype(df[col])
+        ]
+        if numeric_candidates:
+            suggestions["sales"] = numeric_candidates[0]
+            used.add(numeric_candidates[0])
+
+    if suggestions.get("product_name") is None:
+        for col in columns:
+            if col in used:
+                continue
+            suggestions["product_name"] = col
+            used.add(col)
+            break
+
+    if suggestions.get("channel") is None:
+        for col in columns:
+            if col in used:
+                continue
+            suggestions["channel"] = col
+            used.add(col)
+            break
+
+    return suggestions
+
+
+def render_column_mapping_tool(
+    columns: List[object],
+    mapping: Dict[str, Optional[str]],
+    *,
+    key: str,
+) -> Optional[Dict[str, Optional[str]]]:
+    column_payload: List[Dict[str, str]] = []
+    id_to_column: Dict[str, object] = {}
+    name_to_id: Dict[object, str] = {}
+    for idx, column in enumerate(columns):
+        column_id = f"col_{idx}"
+        column_payload.append({"id": column_id, "label": str(column)})
+        id_to_column[column_id] = column
+        if column not in name_to_id:
+            name_to_id[column] = column_id
+
+    normalized_mapping = {}
+    for field in UPLOAD_FIELD_DEFS:
+        value = mapping.get(field["key"])
+        normalized_mapping[field["key"]] = name_to_id.get(value)
+
+    fields_payload = [
+        {
+            "field": field["key"],
+            "label": field["label"],
+            "description": field["description"],
+            "required": field["required"],
+        }
+        for field in UPLOAD_FIELD_DEFS
+    ]
+
+    columns_json = json.dumps(column_payload, ensure_ascii=False)
+    fields_json = json.dumps(fields_payload, ensure_ascii=False)
+    mapping_json = json.dumps(normalized_mapping, ensure_ascii=False)
+
+    field_blocks = []
+    for field in UPLOAD_FIELD_DEFS:
+        badge = (
+            "<span class='mapping-badge mapping-badge--required'>必須</span>"
+            if field["required"]
+            else "<span class='mapping-badge mapping-badge--optional'>任意</span>"
+        )
+        title = html.escape(field["label"])
+        description = html.escape(field["description"])
+        field_blocks.append(
+            f"""
+            <div class=\"mapping-field\">
+                <div class=\"mapping-field__label\">
+                    <span class=\"mapping-field__title\">{title}</span>
+                    {badge}
+                </div>
+                <div class=\"mapping-field__description\">{description}</div>
+                <div class=\"mapping-field__dropzone dropzone\" data-field=\"{field['key']}\"></div>
+            </div>
+            """
+        )
+
+    fields_html = "\n".join(field_blocks)
+
+    html_code = f"""
+    <style>
+      .mapping-tool{{
+        border:1px solid rgba(18,58,95,0.18);
+        border-radius:16px;
+        background:rgba(255,255,255,0.85);
+        padding:16px;
+        box-shadow:0 6px 18px rgba(10,46,92,0.08);
+      }}
+      .mapping-tool__container{{
+        display:flex;
+        flex-wrap:wrap;
+        gap:16px;
+      }}
+      .mapping-tool__panel{{
+        flex:1 1 280px;
+        background:#ffffff;
+        border:1px solid #dbe4f2;
+        border-radius:12px;
+        padding:16px;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,0.6);
+      }}
+      .mapping-tool__header{{
+        font-weight:700;
+        color:#0f4c81;
+        margin-bottom:12px;
+        font-size:15px;
+      }}
+      .mapping-tool__list{{
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        min-height:60px;
+        border:1px dashed #b6c6da;
+        border-radius:10px;
+        padding:12px;
+        background:#f4f8fd;
+        transition:border-color .2s, background .2s;
+      }}
+      .mapping-tool__list.list--active{{
+        border-color:#2d6f8e;
+        background:rgba(45,111,142,0.08);
+      }}
+      .dropzone{{
+        min-height:56px;
+        border:1px dashed #b6c6da;
+        border-radius:10px;
+        padding:12px;
+        background:#f4f8fd;
+        display:flex;
+        flex-wrap:wrap;
+        gap:8px;
+        align-items:center;
+        transition:border-color .2s, background .2s;
+      }}
+      .dropzone.dropzone--active{{
+        border-color:#2d6f8e;
+        background:rgba(45,111,142,0.08);
+      }}
+      .pill{{
+        background:#ffffff;
+        border:1px solid #2d6f8e;
+        color:#0b1726;
+        padding:4px 12px;
+        border-radius:999px;
+        font-size:13px;
+        font-weight:600;
+        cursor:grab;
+        user-select:none;
+        box-shadow:0 2px 6px rgba(18,58,95,0.08);
+      }}
+      .pill--assigned{{
+        background:#2d6f8e;
+        color:#ffffff;
+      }}
+      .pill--dragging{{ opacity:0.6; }}
+      .placeholder{{
+        font-size:12px;
+        color:#6d7c91;
+        font-style:italic;
+      }}
+      .mapping-field{{ margin-bottom:14px; }}
+      .mapping-field:last-child{{ margin-bottom:0; }}
+      .mapping-field__label{{
+        display:flex;
+        align-items:center;
+        gap:8px;
+        margin-bottom:4px;
+      }}
+      .mapping-field__title{{
+        font-weight:700;
+        color:#0b2f4c;
+      }}
+      .mapping-field__description{{
+        font-size:12px;
+        color:#52657a;
+        margin-bottom:6px;
+      }}
+      .mapping-badge{{
+        font-size:11px;
+        padding:2px 8px;
+        border-radius:999px;
+        background:rgba(15,76,129,0.12);
+        color:#0f4c81;
+        font-weight:600;
+      }}
+      .mapping-badge--required{{
+        background:rgba(197,48,48,0.16);
+        color:#a11f1f;
+      }}
+      .mapping-tool__hint{{
+        margin-top:10px;
+        font-size:12px;
+        color:#52657a;
+      }}
+    </style>
+    <div class="mapping-tool" id="mapping-root">
+      <div class="mapping-tool__container">
+        <div class="mapping-tool__panel">
+          <div class="mapping-tool__header">アップロード列</div>
+          <div class="mapping-tool__list" id="available-columns"></div>
+          <div class="mapping-tool__hint">ドラッグ＆ドロップで割り当て、ダブルクリックで元に戻せます。</div>
+        </div>
+        <div class="mapping-tool__panel">
+          <div class="mapping-tool__header">必要項目</div>
+          {fields_html}
+        </div>
+      </div>
+    </div>
+    <script>
+    (function() {{
+        const columns = {columns_json};
+        const columnById = Object.fromEntries(columns.map(col => [col.id, col]));
+        const fields = {fields_json};
+        const initialMapping = {mapping_json} || {{}};
+        const state = {{ mapping: {{}} }};
+        fields.forEach(field => {{
+            state.mapping[field.field] = initialMapping[field.field] || null;
+        }});
+        const root = document.getElementById("mapping-root");
+        const available = document.getElementById("available-columns");
+
+        function pushValue() {{
+            if (window.Streamlit && window.Streamlit.setComponentValue) {{
+                Streamlit.setComponentValue(state.mapping);
+            }}
+        }}
+
+        function render() {{
+            const used = new Set(Object.values(state.mapping).filter(Boolean));
+            available.innerHTML = "";
+            columns.forEach(col => {{
+                if (!used.has(col.id)) {{
+                    const pill = document.createElement("div");
+                    pill.className = "pill";
+                    pill.textContent = col.label;
+                    pill.dataset.col = col.id;
+                    available.appendChild(pill);
+                }}
+            }});
+            fields.forEach(field => {{
+                const zone = root.querySelector(`.dropzone[data-field="${{field.field}}"]`);
+                if (!zone) return;
+                zone.innerHTML = "";
+                const mappedId = state.mapping[field.field];
+                if (mappedId && columnById[mappedId]) {{
+                    const pill = document.createElement("div");
+                    pill.className = "pill pill--assigned";
+                    pill.textContent = columnById[mappedId].label;
+                    pill.dataset.col = mappedId;
+                    zone.appendChild(pill);
+                }} else {{
+                    const placeholder = document.createElement("div");
+                    placeholder.className = "placeholder";
+                    placeholder.textContent = "ここにドロップ";
+                    zone.appendChild(placeholder);
+                }}
+            }});
+            pushValue();
+        }}
+
+        function release(colId) {{
+            let changed = false;
+            Object.keys(state.mapping).forEach(key => {{
+                if (state.mapping[key] === colId) {{
+                    state.mapping[key] = null;
+                    changed = true;
+                }}
+            }});
+            if (changed) {{
+                render();
+            }}
+        }}
+
+        function assign(fieldKey, colId) {{
+            if (!columnById[colId]) {{
+                return;
+            }}
+            let changed = false;
+            Object.keys(state.mapping).forEach(key => {{
+                if (state.mapping[key] === colId && key !== fieldKey) {{
+                    state.mapping[key] = null;
+                    changed = true;
+                }}
+            }});
+            if (state.mapping[fieldKey] !== colId) {{
+                state.mapping[fieldKey] = colId;
+                changed = true;
+            }}
+            if (changed) {{
+                render();
+            }}
+        }}
+
+        root.addEventListener("dragstart", event => {{
+            const pill = event.target.closest(".pill");
+            if (!pill) return;
+            event.dataTransfer.setData("text/plain", pill.dataset.col || "");
+            event.dataTransfer.effectAllowed = "move";
+            pill.classList.add("pill--dragging");
+        }});
+
+        root.addEventListener("dragend", event => {{
+            const pill = event.target.closest(".pill");
+            if (pill) pill.classList.remove("pill--dragging");
+        }});
+
+        root.addEventListener("dblclick", event => {{
+            const pill = event.target.closest(".pill");
+            if (!pill) return;
+            release(pill.dataset.col || "");
+        }});
+
+        root.addEventListener("dragover", event => {{
+            const zone = event.target.closest(".dropzone");
+            if (zone) {{
+                event.preventDefault();
+                zone.classList.add("dropzone--active");
+                return;
+            }}
+            if (event.target.closest("#available-columns")) {{
+                event.preventDefault();
+                available.classList.add("list--active");
+            }}
+        }});
+
+        root.addEventListener("dragleave", event => {{
+            const zone = event.target.closest(".dropzone");
+            if (zone) {{
+                zone.classList.remove("dropzone--active");
+                return;
+            }}
+            if (event.target.closest("#available-columns")) {{
+                available.classList.remove("list--active");
+            }}
+        }});
+
+        root.addEventListener("drop", event => {{
+            const colId = event.dataTransfer.getData("text/plain");
+            const zone = event.target.closest(".dropzone");
+            if (zone) {{
+                event.preventDefault();
+                zone.classList.remove("dropzone--active");
+                if (colId) {{
+                    assign(zone.dataset.field, colId);
+                }}
+                return;
+            }}
+            if (event.target.closest("#available-columns")) {{
+                event.preventDefault();
+                available.classList.remove("list--active");
+                if (colId) {{
+                    release(colId);
+                }}
+            }}
+        }});
+
+        render();
+        if (window.Streamlit && window.Streamlit.setComponentReady) {{
+            Streamlit.setComponentReady();
+        }}
+    }})();
+    </script>
+    """
+
+    component_value = components.html(html_code, height=420, scrolling=False, key=key)
+    if isinstance(component_value, dict):
+        resolved: Dict[str, Optional[str]] = {}
+        for field in UPLOAD_FIELD_DEFS:
+            mapped_id = component_value.get(field["key"])
+            resolved[field["key"]] = id_to_column.get(mapped_id)
+        return resolved
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def build_upload_template() -> bytes:
+    template_df = pd.DataFrame(
+        {
+            "年月": [
+                "2024-01",
+                "2024-01",
+                "2024-02",
+                "2024-02",
+                "2024-03",
+                "2024-03",
+            ],
+            "チャネル": ["EC", "店舗", "EC", "店舗", "EC", "店舗"],
+            "商品名": [
+                "サンプル栄養ドリンクA",
+                "サンプル炭酸飲料B",
+                "サンプル栄養ドリンクA",
+                "サンプル炭酸飲料B",
+                "サンプル栄養ドリンクA",
+                "サンプル炭酸飲料B",
+            ],
+            "売上額": [1250000, 980000, 1300000, 1010000, 1280000, 990000],
+            "商品コード": [
+                "TMP-A",
+                "TMP-B",
+                "TMP-A",
+                "TMP-B",
+                "TMP-A",
+                "TMP-B",
+            ],
+        }
+    )
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+        template_df.to_excel(writer, sheet_name="売上データ", index=False)
+        workbook = writer.book
+        sheet = writer.sheets["売上データ"]
+        header_format = workbook.add_format(
+            {"bold": True, "bg_color": "#dbe8f5", "border": 1, "font_color": "#0b2f4c"}
+        )
+        for col_idx, column_name in enumerate(template_df.columns):
+            sheet.write(0, col_idx, column_name, header_format)
+        sheet.freeze_panes(1, 0)
+        sheet.set_column("A:A", 14)
+        sheet.set_column("B:B", 12)
+        sheet.set_column("C:C", 26)
+        sheet.set_column("D:D", 14)
+        sheet.set_column("E:E", 16)
+
+        readme = workbook.add_worksheet("README")
+        readme.set_column("A:A", 60)
+        readme.write(0, 0, "RollingUp データ取込テンプレート")
+        readme.write(2, 0, "必要列")
+        readme.write(3, 0, "- 年月: YYYY-MM 形式（例: 2024-01）")
+        readme.write(4, 0, "- チャネル: 販売チャネル名（例: EC, 店舗）")
+        readme.write(5, 0, "- 商品名: 商品名称 / SKU 名")
+        readme.write(6, 0, "- 売上額: 金額（円）")
+        readme.write(8, 0, "任意列")
+        readme.write(9, 0, "- 商品コード: SKU コード。未設定の場合は自動で付番されます。")
+        readme.write(11, 0, "メモ")
+        readme.write(12, 0, "- 同一商品が複数チャネルに存在する場合はチャネル別に集計されます。")
+        readme.write(13, 0, "- 日次・週次データは年月で集計してからアップロードしてください。")
+
+    buffer.seek(0)
+    return buffer.getvalue()
 
 APP_TITLE = t("header.title", language=current_language)
 st.set_page_config(
@@ -657,6 +1228,10 @@ if "click_log" not in st.session_state:
     st.session_state.click_log = {}
 if "filters" not in st.session_state:
     st.session_state.filters = {}
+if "upload_mapping" not in st.session_state:
+    st.session_state.upload_mapping = None
+if "upload_signature" not in st.session_state:
+    st.session_state.upload_signature = None
 
 # currency unit scaling factors
 UNIT_MAP = {"円": 1, "千円": 1_000, "百万円": 1_000_000}
@@ -2261,9 +2836,51 @@ if page == "データ取込":
     )
 
     st.markdown(
-        "**Excel(.xlsx) / CSV をアップロードしてください。** "
-        "列に `YYYY-MM`（または日付系）形式の月度が含まれている必要があります。"
+        """
+        <style>
+          .upload-guide{background:rgba(255,255,255,0.85);border:1px solid #c6d4e6;border-radius:16px;padding:18px;box-shadow:0 8px 20px rgba(18,58,95,0.08);}
+          .upload-guide h4{margin-top:0;margin-bottom:0.6rem;font-weight:700;color:#0f4c81;}
+          .upload-guide ul{padding-left:1.2rem;margin-top:0;margin-bottom:0.8rem;}
+          .upload-guide li{margin-bottom:0.35rem;}
+          .upload-guide__note{font-size:0.82rem;color:#4b5c6c;margin:0.4rem 0 0;}
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+
+    guide_left, guide_right = st.columns([3, 2])
+    with guide_left:
+        st.markdown(
+            """
+            <div class="upload-guide">
+              <h4>📋 必要列</h4>
+              <ul>
+                <li><strong>年月</strong>: YYYY-MM 形式（例: 2024-01）</li>
+                <li><strong>チャネル</strong>: EC / 店舗などの販売チャネル</li>
+                <li><strong>商品名</strong>: SKU やサービス名称</li>
+                <li><strong>売上額</strong>: 金額（円・税区分は任意）</li>
+              </ul>
+              <h4>🔍 推奨フォーマット</h4>
+              <ul>
+                <li>年月は <code>YYYY-MM</code> もしくは日付形式で指定してください。</li>
+                <li>チャネルと商品名はテキスト列で入力してください。</li>
+                <li>売上額は数値列で、マイナス値（返品）にも対応しています。</li>
+              </ul>
+              <p class="upload-guide__note">※ 同一商品が複数チャネルに存在する場合はチャネル別に集計します。</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with guide_right:
+        template_bytes = build_upload_template()
+        st.download_button(
+            "Excelテンプレートをダウンロード",
+            data=template_bytes,
+            file_name="rollingup_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="secondary",
+        )
+        st.caption("テンプレートには推奨列とサンプル値があらかじめ入力されています。")
 
     col_u1, col_u2 = st.columns([2, 1])
     with col_u1:
@@ -2292,20 +2909,67 @@ if page == "データ取込":
         st.caption("アップロードプレビュー（先頭100行）")
         st.dataframe(df_raw.head(100), use_container_width=True)
 
-        cols = df_raw.columns.tolist()
-        product_name_col = st.selectbox("商品名列の選択", options=cols, index=0)
-        product_code_col = st.selectbox(
-            "商品コード列の選択（任意）", options=["<なし>"] + cols, index=0
-        )
-        code_col = None if product_code_col == "<なし>" else product_code_col
+        columns_signature = tuple(df_raw.columns.tolist())
+        if st.session_state.upload_signature != columns_signature:
+            st.session_state.upload_signature = columns_signature
+            st.session_state.upload_mapping = None
 
-        if st.button("変換＆取込", type="primary"):
+        suggestions = suggest_column_mapping(df_raw)
+        if st.session_state.upload_mapping is None:
+            st.session_state.upload_mapping = dict(suggestions)
+
+        header_col, reset_col = st.columns([3, 1])
+        with header_col:
+            st.subheader("列の自動マッピング")
+            st.caption("必要項目に列をドラッグ＆ドロップで割り当ててください。")
+        with reset_col:
+            if st.button("推奨マッピングにリセット"):
+                st.session_state.upload_mapping = dict(suggestions)
+
+        current_mapping = {
+            field["key"]: st.session_state.upload_mapping.get(field["key"])
+            for field in UPLOAD_FIELD_DEFS
+        }
+        mapping_update = render_column_mapping_tool(
+            df_raw.columns.tolist(), current_mapping, key="upload_mapping_tool"
+        )
+        if mapping_update is not None:
+            st.session_state.upload_mapping = mapping_update
+
+        column_mapping = {
+            field["key"]: st.session_state.upload_mapping.get(field["key"])
+            for field in UPLOAD_FIELD_DEFS
+        }
+
+        summary_rows = []
+        missing_required = []
+        for field in UPLOAD_FIELD_DEFS:
+            mapped_col = column_mapping.get(field["key"])
+            if mapped_col:
+                display_value = str(mapped_col)
+            else:
+                display_value = "未割当" if field["required"] else "未割当（任意）"
+                if field["required"]:
+                    missing_required.append(field["label"])
+            summary_rows.append({"必要項目": field["label"], "割当列": display_value})
+
+        st.table(pd.DataFrame(summary_rows))
+        if missing_required:
+            st.warning("未割当の必須項目があります: " + ", ".join(missing_required))
+
+        convert_disabled = bool(missing_required)
+        convert_help = (
+            "すべての必須項目を割り当ててください。"
+            if convert_disabled
+            else "マッピング内容でデータを取り込みます。"
+        )
+
+        if st.button("変換＆取込", type="primary", disabled=convert_disabled, help=convert_help):
             try:
                 with st.spinner("年計データを計算中…"):
                     long_df = parse_uploaded_table(
                         df_raw,
-                        product_name_col=product_name_col,
-                        product_code_col=code_col,
+                        column_mapping=column_mapping,
                     )
                     long_df = fill_missing_months(
                         long_df, policy=st.session_state.settings["missing_policy"]
