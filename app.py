@@ -118,6 +118,7 @@ from services import (
     shape_flags,
     detect_linear_anomalies,
 )
+from sample_data import load_sample_dataset
 from core.chart_card import toolbar_sku_detail, build_chart_card
 from core.plot_utils import apply_elegant_theme, render_plotly_with_spinner
 from core.correlation import (
@@ -648,6 +649,8 @@ if "tour_step_index" not in st.session_state:
     st.session_state.tour_step_index = 0
 if "tour_completed" not in st.session_state:
     st.session_state.tour_completed = False
+if "sample_data_notice" not in st.session_state:
+    st.session_state.sample_data_notice = False
 
 # track user interactions and global filters
 if "click_log" not in st.session_state:
@@ -2210,14 +2213,44 @@ render_tour_banner()
 
 render_step_guide(page_key)
 
+if st.session_state.get("sample_data_notice"):
+    st.success("サンプルデータを読み込みました。ダッシュボードからすぐに分析を確認できます。")
+    st.session_state.sample_data_notice = False
+
 if (
     st.session_state.data_year is None
     or st.session_state.data_monthly is None
 ):
     st.info(
-        "左メニューの「データ取込」からCSVまたはExcelファイルをアップロードしてください。"
-        "サンプルデータを用意すると初見の利用者も迷いません。"
+        "左メニューの「データ取込」からCSVまたはExcelファイルをアップロードしてください。\n\n"
+        "時間がない場合は下のサンプルデータを使ってすぐに操作感を確認できます。"
     )
+    st.caption(
+        "フェルミ推定ではサンプル体験により1時間以上かかる初期設定を15分程度に短縮できます。"
+    )
+    if st.button(
+        "サンプルデータを表示する",
+        type="primary",
+        help="サンプルの年計データを読み込み、すべてのダッシュボード機能を体験できます。",
+    ):
+        sample_df = load_sample_dataset()
+        settings = st.session_state.settings
+        long_df = fill_missing_months(
+            sample_df, policy=settings.get("missing_policy", "zero_fill")
+        )
+        year_df = compute_year_rolling(
+            long_df,
+            window=int(settings.get("window", 12)),
+            policy=settings.get("missing_policy", "zero_fill"),
+        )
+        year_df = compute_slopes(
+            year_df,
+            last_n=int(settings.get("last_n", 12)),
+        )
+        st.session_state.data_monthly = long_df
+        st.session_state.data_year = year_df
+        st.session_state.sample_data_notice = True
+        st.experimental_rerun()
 
 # ---------------- Pages ----------------
 
