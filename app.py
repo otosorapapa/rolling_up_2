@@ -620,7 +620,7 @@ def render_tour_banner() -> None:
                     st.session_state.tour_completed = True
                 else:
                     st.session_state.tour_step_index = idx + 1
-                    st.session_state.tour_pending_nav = TOUR_STEPS[idx + 1]["label"]
+                    st.session_state.tour_pending_nav = TOUR_STEPS[idx + 1]["nav_key"]
                     st.session_state.tour_completed = False
                 st.experimental_rerun()
 
@@ -646,7 +646,7 @@ def render_tour_banner() -> None:
                 st.session_state.tour_completed = False
                 st.session_state.tour_step_index = 0
                 if TOUR_STEPS:
-                    st.session_state.tour_pending_nav = TOUR_STEPS[0]["label"]
+                    st.session_state.tour_pending_nav = TOUR_STEPS[0]["nav_key"]
                 st.experimental_rerun()
             action_col.markdown("</div>", unsafe_allow_html=True)
 
@@ -656,6 +656,7 @@ def render_tour_banner() -> None:
 def apply_tour_highlight(step: Optional[Dict[str, str]]) -> None:
     payload = {
         "key": step.get("key") if step else "",
+        "navKey": step.get("nav_key") if step else "",
         "label": step.get("label") if step else "",
         "heading": step.get("heading") if step else "",
     }
@@ -675,13 +676,17 @@ def apply_tour_highlight(step: Optional[Dict[str, str]]) -> None:
         const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
         if (sidebar) {{
             sidebar.querySelectorAll('.tour-highlight-nav').forEach((el) => el.classList.remove('tour-highlight-nav'));
-            if (STEP.label) {{
+            let target = null;
+            if (STEP.navKey) {{
+                target = sidebar.querySelector(`label[data-nav-key="${{STEP.navKey}}"]`);
+            }}
+            if (!target && STEP.label) {{
                 const labels = Array.from(sidebar.querySelectorAll('label'));
-                const target = labels.find((el) => normalize(el.innerText) === normalize(STEP.label));
-                if (target) {{
-                    target.classList.add('tour-highlight-nav');
-                    target.scrollIntoView({{ block: 'nearest' }});
-                }}
+                target = labels.find((el) => normalize(el.innerText) === normalize(STEP.label));
+            }}
+            if (target) {{
+                target.classList.add('tour-highlight-nav');
+                target.scrollIntoView({{ block: 'nearest' }});
             }}
         }}
 
@@ -1028,36 +1033,351 @@ NAME_MAP = {
 }
 
 
+
 # ---------------- Sidebar ----------------
 st.sidebar.markdown(
     f"""
-    <div style="font-weight:700; font-size:1.05rem; letter-spacing:.08em; text-transform:uppercase; margin-bottom:0.75rem;">
-        {APP_TITLE}
+    <div class="sidebar-app-brand">
+        <div class="sidebar-app-brand__title">{APP_TITLE}</div>
+        <p class="sidebar-app-brand__caption">メニューは色分けされ、各機能の役割がひと目で分かります。</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 st.sidebar.title(t("sidebar.navigation_title"))
 
+st.markdown(
+    """
+    <style>
+    [data-testid="stSidebar"] .sidebar-app-brand{
+      background:linear-gradient(135deg, rgba(255,255,255,0.24), rgba(255,255,255,0.06));
+      border-radius:18px;
+      padding:1rem 1.1rem;
+      border:1px solid rgba(255,255,255,0.2);
+      box-shadow:0 14px 32px rgba(7,32,54,0.32);
+      margin-bottom:1.1rem;
+    }
+    [data-testid="stSidebar"] .sidebar-app-brand__title{
+      font-size:1.18rem;
+      font-weight:800;
+      letter-spacing:.08em;
+      margin:0 0 .35rem;
+      color:#ffffff;
+    }
+    [data-testid="stSidebar"] .sidebar-app-brand__caption{
+      font-size:0.9rem;
+      line-height:1.55;
+      color:rgba(255,255,255,0.86);
+      margin:0;
+    }
+    [data-testid="stSidebar"] .sidebar-legend{
+      background:rgba(255,255,255,0.08);
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,0.2);
+      padding:0.75rem 0.85rem;
+      margin:0 0 0.9rem;
+      box-shadow:0 8px 18px rgba(7,32,54,0.28);
+    }
+    [data-testid="stSidebar"] .sidebar-legend__title{
+      font-size:0.78rem;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+      margin:0 0 0.55rem;
+      color:rgba(255,255,255,0.72);
+      font-weight:700;
+    }
+    [data-testid="stSidebar"] .sidebar-legend__items{
+      display:flex;
+      flex-wrap:wrap;
+      gap:0.4rem;
+    }
+    [data-testid="stSidebar"] .sidebar-legend__item{
+      display:inline-flex;
+      align-items:center;
+      gap:0.35rem;
+      padding:0.25rem 0.6rem;
+      border-radius:999px;
+      background:rgba(255,255,255,0.12);
+      color:#ffffff;
+      font-size:0.82rem;
+      font-weight:600;
+      box-shadow:0 4px 10px rgba(7,32,54,0.22);
+    }
+    [data-testid="stSidebar"] .sidebar-legend__item::before{
+      content:"";
+      width:0.55rem;
+      height:0.55rem;
+      border-radius:50%;
+      background:var(--legend-color,#71b7d4);
+      box-shadow:0 0 0 3px rgba(255,255,255,0.15);
+    }
+    [data-testid="stSidebar"] .sidebar-legend__hint{
+      margin:0.6rem 0 0;
+      font-size:0.78rem;
+      color:rgba(255,255,255,0.7);
+    }
+    [data-testid="stSidebar"] label.nav-pill{
+      display:flex;
+      align-items:flex-start;
+      gap:0.75rem;
+      padding:0.85rem 0.95rem;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,0.16);
+      background:rgba(255,255,255,0.06);
+      margin-bottom:0.5rem;
+      box-shadow:0 14px 26px rgba(7,32,54,0.28);
+      position:relative;
+      transition:transform .12s ease, border-color .12s ease, background-color .12s ease, box-shadow .12s ease;
+    }
+    [data-testid="stSidebar"] label.nav-pill:hover{
+      transform:translateY(-2px);
+      border-color:rgba(255,255,255,0.4);
+      background:rgba(255,255,255,0.12);
+      box-shadow:0 18px 32px rgba(7,32,54,0.34);
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__icon{
+      width:2.6rem;
+      height:2.6rem;
+      border-radius:50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-size:1.35rem;
+      background:rgba(var(--nav-accent-rgb,71,183,212),0.18);
+      border:2px solid rgba(var(--nav-accent-rgb,71,183,212),0.45);
+      box-shadow:0 10px 20px rgba(var(--nav-accent-rgb,71,183,212),0.35);
+      color:#ffffff;
+      flex-shrink:0;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__body{
+      display:flex;
+      flex-direction:column;
+      gap:0.2rem;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__badge{
+      display:inline-flex;
+      align-items:center;
+      justify-content:flex-start;
+      gap:0.3rem;
+      font-size:0.75rem;
+      font-weight:700;
+      padding:0.18rem 0.55rem;
+      border-radius:999px;
+      background:rgba(var(--nav-accent-rgb,71,183,212),0.28);
+      color:#ffffff;
+      width:max-content;
+      letter-spacing:.06em;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__badge:empty{
+      display:none;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__title{
+      font-size:1rem;
+      font-weight:700;
+      color:#f8fbff !important;
+      line-height:1.2;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__desc{
+      font-size:0.85rem;
+      line-height:1.35;
+      color:rgba(255,255,255,0.82) !important;
+    }
+    [data-testid="stSidebar"] label.nav-pill .nav-pill__desc:empty{
+      display:none;
+    }
+    [data-testid="stSidebar"] label.nav-pill.nav-pill--active{
+      border-color:rgba(var(--nav-accent-rgb,71,183,212),0.65);
+      background:rgba(var(--nav-accent-rgb,71,183,212),0.25);
+      box-shadow:0 20px 36px rgba(var(--nav-accent-rgb,71,183,212),0.48);
+    }
+    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__icon{
+      background:rgba(var(--nav-accent-rgb,71,183,212),0.35);
+      border-color:rgba(var(--nav-accent-rgb,71,183,212),0.85);
+    }
+    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__badge{
+      background:rgba(var(--nav-accent-rgb,71,183,212),0.55);
+    }
+    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__title{
+      color:#ffffff !important;
+    }
+    [data-testid="stSidebar"] label.nav-pill.nav-pill--active .nav-pill__desc{
+      color:rgba(255,255,255,0.92) !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+SIDEBAR_CATEGORY_STYLES = {
+    "basic": {"label": "基本データ", "color": "#2d6f8e"},
+    "insight": {"label": "深掘り分析", "color": "#71b7d4"},
+    "risk": {"label": "リスク分析", "color": "#f2994a"},
+    "management": {"label": "運用・共有", "color": "#b28cf5"},
+}
+SIDEBAR_CATEGORY_ORDER = ["basic", "insight", "risk", "management"]
+
 SIDEBAR_PAGES = [
-    ("🏠 ホーム", "ダッシュボード"),
-    ("📊 ランキング", "ランキング"),
-    ("🔁 比較ビュー", "比較ビュー"),
-    ("🧾 SKU詳細", "SKU詳細"),
-    ("⚠️ 異常検知", "異常検知"),
-    ("🔗 相関分析", "相関分析"),
-    ("🛍️ 併買カテゴリ", "併買カテゴリ"),
-    ("📥 データ取込", "データ取込"),
-    ("🚨 アラート", "アラート"),
-    ("⚙️ 設定", "設定"),
-    ("💾 保存ビュー", "保存ビュー"),
+    {
+        "key": "dashboard",
+        "page": "ダッシュボード",
+        "icon": "🏠",
+        "title": "ホーム",
+        "tagline": "全体ダッシュボード",
+        "tooltip": "主要KPIとトレンドを俯瞰できるダッシュボードです。",
+        "category": "basic",
+    },
+    {
+        "key": "ranking",
+        "page": "ランキング",
+        "icon": "📊",
+        "title": "ランキング",
+        "tagline": "指標別トップ・ボトム",
+        "tooltip": "指定月の上位・下位SKUを指標別に比較して勢いを捉えます。",
+        "category": "insight",
+    },
+    {
+        "key": "compare",
+        "page": "比較ビュー",
+        "icon": "🔁",
+        "title": "比較ビュー",
+        "tagline": "SKU横断の推移比較",
+        "tooltip": "複数SKUの推移を重ね合わせ、変化の違いを見比べます。",
+        "category": "insight",
+    },
+    {
+        "key": "detail",
+        "page": "SKU詳細",
+        "icon": "🧾",
+        "title": "SKU詳細",
+        "tagline": "個別SKUの深掘り",
+        "tooltip": "個別SKUの時系列やAIサマリーで背景を確認します。",
+        "category": "insight",
+    },
+    {
+        "key": "correlation",
+        "page": "相関分析",
+        "icon": "🔗",
+        "title": "相関分析",
+        "tagline": "指標のつながり分析",
+        "tooltip": "散布図と相関係数で指標同士やSKU間の関係を把握します。",
+        "category": "insight",
+    },
+    {
+        "key": "category",
+        "page": "併買カテゴリ",
+        "icon": "🛍️",
+        "title": "併買カテゴリ",
+        "tagline": "併買パターンの探索",
+        "tooltip": "購買ネットワークのクラスタリングでクロスセル候補を探します。",
+        "category": "insight",
+    },
+    {
+        "key": "import",
+        "page": "データ取込",
+        "icon": "📥",
+        "title": "データ取込",
+        "tagline": "CSV/Excelアップロード",
+        "tooltip": "CSVやExcelの月次データを取り込み、分析用データを整えます。",
+        "category": "basic",
+    },
+    {
+        "key": "anomaly",
+        "page": "異常検知",
+        "icon": "⚠️",
+        "title": "異常検知",
+        "tagline": "異常値とリスク検知",
+        "tooltip": "回帰残差を基にした異常値スコアでリスク兆候を洗い出します。",
+        "category": "risk",
+    },
+    {
+        "key": "alert",
+        "page": "アラート",
+        "icon": "🚨",
+        "title": "アラート",
+        "tagline": "しきい値ベースの監視",
+        "tooltip": "設定した条件に該当するSKUをリスト化し、対応優先度を整理します。",
+        "category": "risk",
+    },
+    {
+        "key": "settings",
+        "page": "設定",
+        "icon": "⚙️",
+        "title": "設定",
+        "tagline": "集計条件の設定",
+        "tooltip": "年計ウィンドウや通貨単位など、分析前提を調整します。",
+        "category": "management",
+    },
+    {
+        "key": "saved",
+        "page": "保存ビュー",
+        "icon": "💾",
+        "title": "保存ビュー",
+        "tagline": "条件の保存と共有",
+        "tooltip": "現在の設定や比較条件を保存し、ワンクリックで再現します。",
+        "category": "management",
+    },
 ]
+
+SIDEBAR_PAGE_LOOKUP = {page["key"]: page for page in SIDEBAR_PAGES}
+NAV_KEYS = [page["key"] for page in SIDEBAR_PAGES]
+NAV_TITLE_LOOKUP = {page["key"]: page["title"] for page in SIDEBAR_PAGES}
+page_lookup = {page["key"]: page["page"] for page in SIDEBAR_PAGES}
+
+
+def _hex_to_rgb_string(color: str) -> str:
+    stripped = color.lstrip("#")
+    if len(stripped) == 6:
+        try:
+            r, g, b = (int(stripped[i : i + 2], 16) for i in (0, 2, 4))
+            return f"{r}, {g}, {b}"
+        except ValueError:
+            pass
+    return "71, 183, 212"
+
+
+nav_client_data: List[Dict[str, str]] = []
+for page in SIDEBAR_PAGES:
+    category_info = SIDEBAR_CATEGORY_STYLES.get(page["category"], {})
+    color = category_info.get("color", "#71b7d4")
+    nav_client_data.append(
+        {
+            "key": page["key"],
+            "title": page["title"],
+            "tagline": page.get("tagline", ""),
+            "icon": page.get("icon", ""),
+            "tooltip": page.get("tooltip", ""),
+            "category": page["category"],
+            "category_label": category_info.get("label", ""),
+            "color": color,
+            "rgb": _hex_to_rgb_string(color),
+        }
+    )
+
+used_category_keys = [
+    cat for cat in SIDEBAR_CATEGORY_ORDER if any(p["category"] == cat for p in SIDEBAR_PAGES)
+]
+if used_category_keys:
+    legend_items_html = "".join(
+        f"<span class='sidebar-legend__item' style='--legend-color:{SIDEBAR_CATEGORY_STYLES[cat]['color']};'>{SIDEBAR_CATEGORY_STYLES[cat]['label']}</span>"
+        for cat in used_category_keys
+    )
+    st.sidebar.markdown(
+        f"""
+        <div class="sidebar-legend">
+            <p class="sidebar-legend__title">色でカテゴリを表示しています</p>
+            <div class="sidebar-legend__items">{legend_items_html}</div>
+            <p class="sidebar-legend__hint">アイコンにカーソルを合わせると各機能の説明が表示されます。</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 TOUR_STEPS: List[Dict[str, str]] = [
     {
         "key": "import",
-        "label": "📥 データ取込",
-        "page": "データ取込",
+        "nav_key": "import",
+        "label": SIDEBAR_PAGE_LOOKUP["import"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["import"]["page"],
         "heading": "データ取込",
         "title": "データ取込",
         "description": "月次の売上データをアップロードし、年計テーブルを生成します。",
@@ -1065,17 +1385,19 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "dashboard",
-        "label": "🏠 ホーム",
-        "page": "ダッシュボード",
+        "nav_key": "dashboard",
+        "label": SIDEBAR_PAGE_LOOKUP["dashboard"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["dashboard"]["page"],
         "heading": "ダッシュボード",
         "title": "ダッシュボード",
         "description": "年計KPIと総合トレンドを俯瞰し、AIサマリーで直近の動きを把握します。",
-        "details": "ハイライトとランキングタブを切り替えて主要SKUの変化をチェック。",
+        "details": "ハイライトとランキングタブを切り替え、主要SKUの変化をチェック。",
     },
     {
         "key": "ranking",
-        "label": "📊 ランキング",
-        "page": "ランキング",
+        "nav_key": "ranking",
+        "label": SIDEBAR_PAGE_LOOKUP["ranking"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["ranking"]["page"],
         "heading": "ランキング",
         "title": "ランキング",
         "description": "指定月の上位・下位SKUを指標別に比較して、勢いのある商品を見つけます。",
@@ -1083,8 +1405,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "compare",
-        "label": "🔁 比較ビュー",
-        "page": "比較ビュー",
+        "nav_key": "compare",
+        "label": SIDEBAR_PAGE_LOOKUP["compare"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["compare"]["page"],
         "heading": "マルチ商品比較",
         "title": "比較ビュー",
         "description": "条件で絞った複数SKUの推移を重ね合わせ、帯やバンドで素早く切り替えます。",
@@ -1092,8 +1415,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "detail",
-        "label": "🧾 SKU詳細",
-        "page": "SKU詳細",
+        "nav_key": "detail",
+        "label": SIDEBAR_PAGE_LOOKUP["detail"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["detail"]["page"],
         "heading": "SKU 詳細",
         "title": "SKU詳細",
         "description": "個別SKUの時系列と指標を確認し、メモやタグでアクションを記録します。",
@@ -1101,8 +1425,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "anomaly",
-        "label": "⚠️ 異常検知",
-        "page": "異常検知",
+        "nav_key": "anomaly",
+        "label": SIDEBAR_PAGE_LOOKUP["anomaly"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["anomaly"]["page"],
         "heading": "異常検知",
         "title": "異常検知",
         "description": "回帰残差ベースで異常な月次を検知し、スコアの高い事象を優先的に確認します。",
@@ -1110,8 +1435,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "correlation",
-        "label": "🔗 相関分析",
-        "page": "相関分析",
+        "nav_key": "correlation",
+        "label": SIDEBAR_PAGE_LOOKUP["correlation"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["correlation"]["page"],
         "heading": "相関分析",
         "title": "相関分析",
         "description": "指標間の関係性やSKU同士の動きを散布図と相関係数で分析します。",
@@ -1119,8 +1445,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "category",
-        "label": "🛍️ 併買カテゴリ",
-        "page": "併買カテゴリ",
+        "nav_key": "category",
+        "label": SIDEBAR_PAGE_LOOKUP["category"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["category"]["page"],
         "heading": "購買カテゴリ探索",
         "title": "併買カテゴリ",
         "description": "購買ネットワークをクラスタリングしてクロスセル候補のグルーピングを見つけます。",
@@ -1128,8 +1455,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "alert",
-        "label": "🚨 アラート",
-        "page": "アラート",
+        "nav_key": "alert",
+        "label": SIDEBAR_PAGE_LOOKUP["alert"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["alert"]["page"],
         "heading": "アラート",
         "title": "アラート",
         "description": "設定した閾値に該当するリスクSKUを一覧化し、優先度の高い対応を整理します。",
@@ -1137,8 +1465,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "settings",
-        "label": "⚙️ 設定",
-        "page": "設定",
+        "nav_key": "settings",
+        "label": SIDEBAR_PAGE_LOOKUP["settings"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["settings"]["page"],
         "heading": "設定",
         "title": "設定",
         "description": "年計ウィンドウやアラート条件など、分析の前提を調整します。",
@@ -1146,8 +1475,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
     {
         "key": "saved",
-        "label": "💾 保存ビュー",
-        "page": "保存ビュー",
+        "nav_key": "saved",
+        "label": SIDEBAR_PAGE_LOOKUP["saved"]["title"],
+        "page": SIDEBAR_PAGE_LOOKUP["saved"]["page"],
         "heading": "保存ビュー",
         "title": "保存ビュー",
         "description": "現在の設定や比較条件を名前付きで保存し、ワンクリックで再現できます。",
@@ -1155,37 +1485,134 @@ TOUR_STEPS: List[Dict[str, str]] = [
     },
 ]
 
-nav_labels = [label for label, _ in SIDEBAR_PAGES]
-page_lookup = dict(SIDEBAR_PAGES)
-
 if st.session_state.get("tour_active", True) and TOUR_STEPS:
     initial_idx = max(0, min(st.session_state.get("tour_step_index", 0), len(TOUR_STEPS) - 1))
-    default_label = TOUR_STEPS[initial_idx]["label"]
-    if default_label not in nav_labels:
-        default_label = nav_labels[0]
+    default_key = TOUR_STEPS[initial_idx]["nav_key"]
+    if default_key not in NAV_KEYS:
+        default_key = NAV_KEYS[0]
 else:
-    default_label = nav_labels[0]
+    default_key = NAV_KEYS[0]
 
 if "nav_page" not in st.session_state:
-    st.session_state["nav_page"] = default_label
+    st.session_state["nav_page"] = default_key
 
 if "tour_pending_nav" in st.session_state:
     pending = st.session_state.pop("tour_pending_nav")
-    if pending in nav_labels:
+    if pending in NAV_KEYS:
         st.session_state["nav_page"] = pending
 
-page_label = st.sidebar.radio(
+page_key = st.sidebar.radio(
     "利用する機能を選択",
-    nav_labels,
+    NAV_KEYS,
     key="nav_page",
+    format_func=lambda key: NAV_TITLE_LOOKUP.get(key, key),
 )
-page = page_lookup[page_label]
+page = page_lookup[page_key]
+
+nav_script_payload = json.dumps(nav_client_data, ensure_ascii=False)
+nav_script_template = """
+<script>
+const NAV_DATA = {payload};
+(function() {
+    const doc = window.parent.document;
+    const apply = () => {
+        const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        if (!sidebar) return false;
+        const radioGroup = sidebar.querySelector('div[data-baseweb="radio"]');
+        if (!radioGroup) return false;
+        const labels = Array.from(radioGroup.querySelectorAll('label'));
+        if (!labels.length) return false;
+        const metaByKey = Object.fromEntries(NAV_DATA.map((item) => [item.key, item]));
+        const updateActiveState = () => {
+            labels.forEach((label) => {
+                const input = label.querySelector('input[type="radio"]');
+                if (!input) return;
+                label.classList.toggle('nav-pill--active', input.checked);
+            });
+        };
+        labels.forEach((label) => {
+            const input = label.querySelector('input[type="radio"]');
+            if (!input) return;
+            const meta = metaByKey[input.value];
+            if (!meta) return;
+            label.dataset.navKey = meta.key;
+            label.dataset.navCategory = meta.category;
+            label.setAttribute('title', meta.tooltip || '');
+            label.style.setProperty('--nav-accent', meta.color || '#71b7d4');
+            label.style.setProperty('--nav-accent-rgb', meta.rgb || '71, 183, 212');
+            if (!label.classList.contains('nav-pill')) {
+                label.classList.add('nav-pill');
+            }
+            const spans = label.querySelectorAll('span');
+            let textSpan = null;
+            if (spans.length) {
+                textSpan = spans[spans.length - 1];
+            }
+            if (textSpan) {
+                textSpan.classList.add('nav-pill__body');
+                if (!textSpan.querySelector('.nav-pill__title')) {
+                    textSpan.innerHTML = `
+                        <span class="nav-pill__badge"></span>
+                        <span class="nav-pill__title"></span>
+                        <span class="nav-pill__desc"></span>
+                    `;
+                }
+                const badgeEl = textSpan.querySelector('.nav-pill__badge');
+                if (badgeEl) {
+                    badgeEl.textContent = meta.category_label || '';
+                }
+                const titleEl = textSpan.querySelector('.nav-pill__title');
+                if (titleEl) {
+                    titleEl.textContent = meta.title || '';
+                }
+                const descEl = textSpan.querySelector('.nav-pill__desc');
+                if (descEl) {
+                    descEl.textContent = meta.tagline || '';
+                }
+            }
+            let iconSpan = label.querySelector('.nav-pill__icon');
+            if (!iconSpan) {
+                iconSpan = doc.createElement('span');
+                iconSpan.className = 'nav-pill__icon';
+                iconSpan.textContent = meta.icon || '';
+                if (textSpan) {
+                    label.insertBefore(iconSpan, textSpan);
+                } else {
+                    label.appendChild(iconSpan);
+                }
+            } else {
+                iconSpan.textContent = meta.icon || '';
+            }
+            input.setAttribute('aria-label', meta.title + (meta.tagline ? `: ${meta.tagline}` : ''));
+            input.setAttribute('title', meta.tooltip || '');
+            if (!input.dataset.navEnhanced) {
+                input.addEventListener('change', updateActiveState);
+                input.dataset.navEnhanced = 'true';
+            }
+        });
+        updateActiveState();
+        return true;
+    };
+    const schedule = (attempt = 0) => {
+        const ready = apply();
+        if (!ready && attempt < 10) {
+            setTimeout(() => schedule(attempt + 1), 120);
+        }
+    };
+    schedule();
+})();
+</script>
+"""
+nav_script = nav_script_template.replace("{payload}", nav_script_payload)
+components.html(nav_script, height=0)
 
 if st.session_state.get("tour_active", True):
     for idx, step in enumerate(TOUR_STEPS):
-        if step["label"] == page_label:
+        if step["nav_key"] == page_key:
             st.session_state.tour_step_index = idx
             break
+
+
 latest_month = render_sidebar_summary()
 
 sidebar_state: Dict[str, object] = {}
