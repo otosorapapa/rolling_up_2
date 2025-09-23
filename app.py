@@ -370,20 +370,115 @@ small, .text-small{ font-size:0.88rem; }
   font-size:.94rem;
   color:var(--text);
 }
-.tour-banner__actions{
-  display:flex;
-  flex-direction:column;
-  gap:.6rem;
-  align-items:stretch;
+.tour-banner__section{
+  display:inline-flex;
+  align-items:center;
+  gap:0.45rem;
+  padding:0.25rem 0.8rem;
+  border-radius:999px;
+  background:rgba(15,76,129,0.14);
+  color:var(--accent-strong);
+  font-weight:700;
+  font-size:.82rem;
+  letter-spacing:.02em;
+  text-transform:none;
+  margin-bottom:.55rem;
 }
-.tour-banner__actions [data-testid="stButton"]>button{
+.tour-banner__section span{
+  font-size:.72rem;
+  color:var(--muted);
+  font-weight:700;
+  letter-spacing:.08em;
+}
+.tour-progress{
+  margin:0.85rem 0 0;
+}
+.tour-progress__meta{
+  display:flex;
+  justify-content:space-between;
+  font-size:.78rem;
+  color:var(--muted);
+  font-weight:600;
+  letter-spacing:.05em;
+  text-transform:uppercase;
+  margin-bottom:.35rem;
+}
+.tour-progress__track{
+  position:relative;
+  height:8px;
+  border-radius:999px;
+  background:rgba(15,76,129,0.18);
+  overflow:hidden;
+}
+.tour-progress__bar{
+  position:absolute;
+  inset:0;
+  border-radius:inherit;
+  background:linear-gradient(90deg, var(--accent), var(--accent-soft));
+  transition:width .3s ease;
+}
+.tour-banner__nav{
+  margin-top:1.05rem;
+  display:flex;
+  gap:.65rem;
+}
+.tour-banner__nav [data-testid="column"]{
+  flex:1;
+}
+.tour-banner__nav [data-testid="column"] [data-testid="stButton"]>button{
   width:100%;
   border-radius:12px;
   font-weight:700;
-  box-shadow:0 12px 24px rgba(15,76,129,0.24);
+  box-shadow:0 12px 24px rgba(15,76,129,0.22);
 }
-.tour-banner--muted .tour-banner__actions [data-testid="stButton"]>button{
+.tour-banner__nav [data-testid="column"] [data-testid="stButton"]>button:disabled{
+  opacity:.55;
+  cursor:not-allowed;
   box-shadow:none;
+}
+.tour-banner__nav [data-testid="column"]:first-child [data-testid="stButton"]>button,
+.tour-banner__nav [data-testid="column"]:last-child [data-testid="stButton"]>button{
+  background:#ffffff;
+  color:var(--accent-strong);
+  border:1px solid var(--accent-strong);
+  box-shadow:none;
+}
+.tour-banner__nav [data-testid="column"]:first-child [data-testid="stButton"]>button:hover{
+  background:rgba(15,76,129,0.08);
+}
+.tour-banner__nav [data-testid="column"]:last-child [data-testid="stButton"]>button{
+  border-color:#b24646;
+  color:#b24646;
+}
+.tour-banner__nav [data-testid="column"]:last-child [data-testid="stButton"]>button:hover{
+  background:rgba(178,70,70,0.1);
+  border-color:#962d2d;
+  color:#962d2d;
+}
+.tour-banner__nav--resume{
+  justify-content:flex-start;
+}
+.tour-banner__nav--resume [data-testid="column"]:first-child [data-testid="stButton"]>button{
+  background:var(--accent);
+  color:#ffffff;
+  border-color:var(--accent);
+  box-shadow:0 12px 24px rgba(15,76,129,0.22);
+}
+.tour-banner__nav--resume [data-testid="column"]:first-child [data-testid="stButton"]>button:hover{
+  background:var(--accent-strong);
+  border-color:var(--accent-strong);
+  color:#ffffff;
+}
+.tour-banner__nav--resume [data-testid="column"]:last-child [data-testid="stButton"]>button{
+  background:#ffffff;
+  color:var(--accent-strong);
+  border:1px solid var(--accent-strong);
+  box-shadow:none;
+}
+.tour-banner__nav--resume [data-testid="column"]:last-child [data-testid="stButton"]>button:hover{
+  background:rgba(15,76,129,0.08);
+  border-color:var(--accent-strong);
+  color:var(--accent-strong);
 }
 .tour-highlight-heading{
   position:relative;
@@ -415,6 +510,22 @@ section[data-testid="stSidebar"] label.tour-highlight-nav *{
 }
 .tour-banner--muted .tour-banner__progress{
   color:var(--muted);
+}
+.tour-banner--muted .tour-banner__section{
+  background:rgba(15,76,129,0.08);
+  color:var(--muted);
+}
+.tour-banner--muted .tour-banner__section span{
+  color:var(--muted);
+}
+.tour-banner--muted .tour-progress__meta{
+  color:var(--muted);
+}
+.tour-banner--muted .tour-progress__track{
+  background:rgba(15,76,129,0.1);
+}
+.tour-banner--muted .tour-progress__bar{
+  background:rgba(15,76,129,0.22);
 }
 .tour-banner--muted .tour-banner__desc{
   color:var(--muted);
@@ -588,68 +699,187 @@ def render_tour_banner() -> None:
     with banner:
         banner_class = "tour-banner" if active else "tour-banner tour-banner--muted"
         st.markdown(f"<div class='{banner_class}'>", unsafe_allow_html=True)
-        info_col, action_col = st.columns([5, 1])
-
         if active:
             step = TOUR_STEPS[idx]
-            info_col.markdown(
-                f"<p class='tour-banner__progress'>STEP {idx + 1} / {total}</p>",
-                unsafe_allow_html=True,
-            )
-            info_col.markdown(
-                f"<div class='tour-banner__title'>{step['title']}</div>",
-                unsafe_allow_html=True,
-            )
-            info_col.markdown(
-                f"<p class='tour-banner__desc'>{step['description']}</p>",
-                unsafe_allow_html=True,
-            )
-            details = step.get("details")
-            if details:
-                info_col.markdown(
-                    f"<p class='tour-banner__details'>{details}</p>",
+            section_label = step.get("section", "")
+            section_index = step.get("section_index", idx + 1)
+            section_total = step.get("section_total", total)
+            title_text = step.get("title") or step.get("heading") or step.get("label") or ""
+            description_text = step.get("description", "")
+            details_text = step.get("details", "")
+
+            if section_label:
+                st.markdown(
+                    f"<div class='tour-banner__section'>{html.escape(section_label)}<span>{section_index} / {section_total}</span></div>",
                     unsafe_allow_html=True,
                 )
 
-            action_col.markdown(
-                "<div class='tour-banner__actions'>", unsafe_allow_html=True
+            if title_text:
+                st.markdown(
+                    f"<div class='tour-banner__title'>{html.escape(title_text)}</div>",
+                    unsafe_allow_html=True,
+                )
+            if description_text:
+                st.markdown(
+                    f"<p class='tour-banner__desc'>{html.escape(description_text)}</p>",
+                    unsafe_allow_html=True,
+                )
+            if details_text:
+                st.markdown(
+                    f"<p class='tour-banner__details'>{html.escape(details_text)}</p>",
+                    unsafe_allow_html=True,
+                )
+
+            section_progress_label = (
+                f"{section_label} {section_index} / {section_total}"
+                if section_label
+                else f"STEP {idx + 1} / {total}"
             )
-            next_label = "完了" if idx == total - 1 else "次へ"
-            if action_col.button(next_label, key="tour_next"):
-                if idx == total - 1:
-                    st.session_state.tour_active = False
-                    st.session_state.tour_completed = True
-                else:
-                    st.session_state.tour_step_index = idx + 1
-                    st.session_state.tour_pending_nav = TOUR_STEPS[idx + 1]["nav_key"]
-                    st.session_state.tour_completed = False
+            progress_percent = ((idx + 1) / total) * 100 if total else 0
+            progress_html = f"""
+<div class='tour-progress'>
+  <div class='tour-progress__meta'>
+    <span>{html.escape(section_progress_label)}</span>
+    <span>STEP {idx + 1} / {total}</span>
+  </div>
+  <div class='tour-progress__track' role='progressbar' aria-valuemin='1' aria-valuemax='{total}' aria-valuenow='{idx + 1}'>
+    <div class='tour-progress__bar' style='width: {progress_percent:.2f}%;'></div>
+  </div>
+</div>
+"""
+            st.markdown(progress_html, unsafe_allow_html=True)
+
+            st.markdown("<div class='tour-banner__nav'>", unsafe_allow_html=True)
+            prev_col, next_col, finish_col = st.columns(3)
+            prev_clicked = prev_col.button(
+                "前へ",
+                key="tour_prev",
+                use_container_width=True,
+                disabled=idx == 0,
+            )
+            next_clicked = next_col.button(
+                "次へ",
+                key="tour_next",
+                use_container_width=True,
+                disabled=idx >= total - 1,
+            )
+            finish_clicked = finish_col.button(
+                "終了",
+                key="tour_finish",
+                use_container_width=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            if prev_clicked and idx > 0:
+                new_idx = idx - 1
+                st.session_state.tour_step_index = new_idx
+                st.session_state.tour_pending_nav = TOUR_STEPS[new_idx]["nav_key"]
+                st.session_state.tour_completed = False
                 st.experimental_rerun()
 
-            if action_col.button("スキップ", key="tour_skip"):
+            if next_clicked and idx < total - 1:
+                new_idx = idx + 1
+                st.session_state.tour_step_index = new_idx
+                st.session_state.tour_pending_nav = TOUR_STEPS[new_idx]["nav_key"]
+                st.session_state.tour_completed = False
+                st.experimental_rerun()
+
+            if finish_clicked:
                 st.session_state.tour_active = False
                 st.session_state.tour_completed = True
+                st.session_state.pop("tour_pending_nav", None)
                 st.experimental_rerun()
-            action_col.markdown("</div>", unsafe_allow_html=True)
         else:
-            info_col.markdown(
+            completed = st.session_state.get("tour_completed", False)
+            last_step = TOUR_STEPS[idx] if 0 <= idx < total else None
+            section_label = last_step.get("section", "") if last_step else ""
+            section_index = last_step.get("section_index", 0) if last_step else 0
+            section_total = last_step.get("section_total", 0) if last_step else 0
+            title_text = (
+                last_step.get("title")
+                or last_step.get("heading")
+                or last_step.get("label")
+                or ""
+                if last_step
+                else ""
+            )
+
+            if section_label:
+                st.markdown(
+                    f"<div class='tour-banner__section'>{html.escape(section_label)}<span>{section_index} / {section_total}</span></div>",
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown(
                 "<p class='tour-banner__progress'>チュートリアルツアー</p>",
                 unsafe_allow_html=True,
             )
-            info_col.markdown(
-                "<p class='tour-banner__desc'>再開ボタンでいつでもハイライトを確認できます。</p>",
+
+            if completed and idx == total - 1:
+                desc_text = "基礎編から応用編までのツアーを完了しました。必要なときにいつでも振り返りできます。"
+            elif last_step:
+                desc_text = (
+                    f"前回は{section_label}の「{title_text}」まで進みました。途中から続きが再開できます。"
+                )
+            else:
+                desc_text = "再開ボタンでいつでもハイライトを確認できます。"
+
+            st.markdown(
+                f"<p class='tour-banner__desc'>{html.escape(desc_text)}</p>",
                 unsafe_allow_html=True,
             )
-            action_col.markdown(
-                "<div class='tour-banner__actions'>", unsafe_allow_html=True
+
+            if last_step:
+                section_progress_label = (
+                    f"{section_label} {section_index} / {section_total}"
+                    if section_label
+                    else f"STEP {idx + 1} / {total}"
+                )
+                progress_percent = ((idx + 1) / total) * 100 if total else 0
+                progress_html = f"""
+<div class='tour-progress'>
+  <div class='tour-progress__meta'>
+    <span>{html.escape(section_progress_label)}</span>
+    <span>STEP {idx + 1} / {total}</span>
+  </div>
+  <div class='tour-progress__track' role='progressbar' aria-valuemin='1' aria-valuemax='{total}' aria-valuenow='{idx + 1}'>
+    <div class='tour-progress__bar' style='width: {progress_percent:.2f}%;'></div>
+  </div>
+</div>
+"""
+                st.markdown(progress_html, unsafe_allow_html=True)
+
+            st.markdown(
+                "<div class='tour-banner__nav tour-banner__nav--resume'>",
+                unsafe_allow_html=True,
             )
-            if action_col.button("ツアーを再開", key="tour_restart"):
+            resume_col, restart_col = st.columns(2)
+            resume_clicked = resume_col.button(
+                "再開",
+                key="tour_resume",
+                use_container_width=True,
+            )
+            restart_clicked = restart_col.button(
+                "最初から",
+                key="tour_restart",
+                use_container_width=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            if resume_clicked:
+                st.session_state.tour_active = True
+                st.session_state.tour_completed = False
+                if last_step and last_step.get("nav_key") in NAV_KEYS:
+                    st.session_state.tour_pending_nav = last_step["nav_key"]
+                st.experimental_rerun()
+
+            if restart_clicked:
                 st.session_state.tour_active = True
                 st.session_state.tour_completed = False
                 st.session_state.tour_step_index = 0
                 if TOUR_STEPS:
                     st.session_state.tour_pending_nav = TOUR_STEPS[0]["nav_key"]
                 st.experimental_rerun()
-            action_col.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1491,8 +1721,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["import"]["page"],
         "heading": "データ取込",
         "title": "データ取込",
-        "description": "月次の売上データをアップロードし、年計テーブルを生成します。",
-        "details": "CSV / Excel のマッピングを完了すると全ての可視化が有効になります。",
+        "section": "基礎編",
+        "description": "最初に月次売上データをアップロードし、分析ダッシュボードを有効化します。",
+        "details": "テンプレートのマッピングを完了すると基礎編の残りステップをすぐに確認できます。",
     },
     {
         "key": "dashboard",
@@ -1501,8 +1732,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["dashboard"]["page"],
         "heading": "ダッシュボード",
         "title": "ダッシュボード",
-        "description": "年計KPIと総合トレンドを俯瞰し、AIサマリーで直近の動きを把握します。",
-        "details": "ハイライトとランキングタブを切り替え、主要SKUの変化をチェック。",
+        "section": "基礎編",
+        "description": "年計KPIと総合トレンドを俯瞰し、AIサマリーで直近の動きを素早く把握します。",
+        "details": "ハイライト/ランキングタブで主要SKUの変化を数クリックでチェック。",
     },
     {
         "key": "ranking",
@@ -1511,8 +1743,9 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["ranking"]["page"],
         "heading": "ランキング",
         "title": "ランキング",
-        "description": "指定月の上位・下位SKUを指標別に比較して、勢いのある商品を見つけます。",
-        "details": "並び順や対象指標を切り替え、CSV/Excelで共有用にエクスポートできます。",
+        "section": "基礎編",
+        "description": "指定月の上位・下位SKUを指標別に比較し、勢いのある商品を短時間で把握します。",
+        "details": "並び順や指標を切り替えて気になるSKUを絞り込み、必要に応じてCSV/Excelで共有。",
     },
     {
         "key": "compare",
@@ -1521,6 +1754,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["compare"]["page"],
         "heading": "マルチ商品比較",
         "title": "比較ビュー",
+        "section": "応用編",
         "description": "条件で絞った複数SKUの推移を重ね合わせ、帯やバンドで素早く切り替えます。",
         "details": "操作バーで期間や表示を選び、スモールマルチプルで個別の動きを確認。",
     },
@@ -1531,6 +1765,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["detail"]["page"],
         "heading": "SKU 詳細",
         "title": "SKU詳細",
+        "section": "応用編",
         "description": "個別SKUの時系列と指標を確認し、メモやタグでアクションを記録します。",
         "details": "単品/複数比較モードとAIサマリーで詳細な解釈を補助。",
     },
@@ -1541,6 +1776,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["anomaly"]["page"],
         "heading": "異常検知",
         "title": "異常検知",
+        "section": "応用編",
         "description": "回帰残差ベースで異常な月次を検知し、スコアの高い事象を優先的に確認します。",
         "details": "窓幅・閾値を調整し、AI異常サマリーで発生背景を把握。",
     },
@@ -1551,6 +1787,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["correlation"]["page"],
         "heading": "相関分析",
         "title": "相関分析",
+        "section": "応用編",
         "description": "指標間の関係性やSKU同士の動きを散布図と相関係数で分析します。",
         "details": "相関指標や対象SKUを選び、外れ値の注釈からインサイトを発見。",
     },
@@ -1561,6 +1798,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["category"]["page"],
         "heading": "購買カテゴリ探索",
         "title": "併買カテゴリ",
+        "section": "応用編",
         "description": "購買ネットワークをクラスタリングしてクロスセル候補のグルーピングを見つけます。",
         "details": "入力データや閾値・検出法を変え、ネットワーク可視化をチューニング。",
     },
@@ -1571,6 +1809,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["alert"]["page"],
         "heading": "アラート",
         "title": "アラート",
+        "section": "応用編",
         "description": "設定した閾値に該当するリスクSKUを一覧化し、優先度の高い対応を整理します。",
         "details": "CSVダウンロードで日次の共有や監視に活用。",
     },
@@ -1581,6 +1820,7 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["settings"]["page"],
         "heading": "設定",
         "title": "設定",
+        "section": "応用編",
         "description": "年計ウィンドウやアラート条件など、分析の前提を調整します。",
         "details": "変更後は再計算ボタンでデータを更新し、全ページに反映します。",
     },
@@ -1591,10 +1831,29 @@ TOUR_STEPS: List[Dict[str, str]] = [
         "page": SIDEBAR_PAGE_LOOKUP["saved"]["page"],
         "heading": "保存ビュー",
         "title": "保存ビュー",
+        "section": "応用編",
         "description": "現在の設定や比較条件を名前付きで保存し、ワンクリックで再現できます。",
         "details": "設定と比較条件を共有し、分析の再現性を高めます。",
     },
 ]
+
+
+TOUR_SECTION_ORDER: List[str] = []
+TOUR_SECTION_COUNTS: Dict[str, int] = {}
+for step in TOUR_STEPS:
+    section_name = step.get("section") or "応用編"
+    if section_name not in TOUR_SECTION_COUNTS:
+        TOUR_SECTION_ORDER.append(section_name)
+        TOUR_SECTION_COUNTS[section_name] = 0
+    TOUR_SECTION_COUNTS[section_name] += 1
+    step["section"] = section_name
+
+section_positions: Dict[str, int] = {section: 0 for section in TOUR_SECTION_ORDER}
+for step in TOUR_STEPS:
+    section_name = step.get("section") or "応用編"
+    section_positions[section_name] = section_positions.get(section_name, 0) + 1
+    step["section_index"] = section_positions[section_name]
+    step["section_total"] = TOUR_SECTION_COUNTS.get(section_name, len(TOUR_STEPS))
 
 
 def render_step_guide(active_nav_key: str) -> None:
@@ -1621,6 +1880,11 @@ def render_step_guide(active_nav_key: str) -> None:
 
         tooltip_candidates = [
             NAV_HOVER_LOOKUP.get(nav_key, "").strip(),
+            (
+                f"{step.get('section', '').strip()} {step.get('section_index', 0)} / {step.get('section_total', 0)}"
+                if step.get("section")
+                else ""
+            ),
             step.get("description", "").strip(),
             step.get("details", "").strip(),
         ]
