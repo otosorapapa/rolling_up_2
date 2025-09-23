@@ -112,3 +112,25 @@ def test_parse_with_mapping_marks_missing_values():
     assert not feb_row.empty
     assert pd.isna(feb_row["sales_amount_jpy"].iloc[0])
     assert bool(feb_row["is_missing"].iloc[0])
+
+
+def test_parse_with_mapping_without_channel_column():
+    df = pd.DataFrame(
+        {
+            "年月": ["2024-01", "2024-02"],
+            "商品名": ["Gamma", "Gamma"],
+            "売上額": [500, 600],
+        }
+    )
+
+    mapping = {
+        "month": "年月",
+        "product_name": "商品名",
+        "sales": "売上額",
+        "product_code": None,
+    }
+
+    result = parse_uploaded_table(df, column_mapping=mapping)
+
+    assert set(result["channel"].unique()) == {"全チャネル"}
+    assert result["sales_amount_jpy"].sum() == 1100

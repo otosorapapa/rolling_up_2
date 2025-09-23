@@ -71,12 +71,14 @@ UPLOAD_FIELD_DEFS = [
         "label": "年月",
         "description": "YYYY-MM 形式（例: 2024-01）",
         "required": True,
+        "visible": False,
     },
     {
         "key": "channel",
         "label": "チャネル",
         "description": "販路・流通区分（例: EC, 店舗）",
-        "required": True,
+        "required": False,
+        "visible": False,
     },
     {
         "key": "product_name",
@@ -116,7 +118,16 @@ UPLOAD_FIELD_DEFS = [
     },
 ]
 
-UPLOAD_REQUIRED_KEYS = [field["key"] for field in UPLOAD_FIELD_DEFS if field["required"]]
+UPLOAD_VISIBLE_FIELD_DEFS = [
+    field for field in UPLOAD_FIELD_DEFS if field.get("visible", True)
+]
+UPLOAD_HIDDEN_FIELD_DEFS = [
+    field for field in UPLOAD_FIELD_DEFS if not field.get("visible", True)
+]
+
+UPLOAD_REQUIRED_KEYS = [
+    field["key"] for field in UPLOAD_VISIBLE_FIELD_DEFS if field["required"]
+]
 
 UPLOAD_FIELD_KEYWORDS: Dict[str, List[str]] = {
     "month": ["年月", "yearmonth", "ym", "month", "date", "期間", "会計月"],
@@ -253,22 +264,24 @@ def render_column_mapping_tool(
         if column not in value_to_id:
             value_to_id[column] = column_id
 
+    visible_fields = UPLOAD_VISIBLE_FIELD_DEFS
+
     mapping_ids = {
         field["key"]: value_to_id.get(mapping.get(field["key"]))
-        for field in UPLOAD_FIELD_DEFS
+        for field in visible_fields
     }
 
     state_ids_key = f"{key}__selected_ids"
     if state_ids_key not in st.session_state:
         st.session_state[state_ids_key] = mapping_ids.copy()
-        for field in UPLOAD_FIELD_DEFS:
+        for field in visible_fields:
             widget_key = f"{key}__select__{field['key']}"
             st.session_state[widget_key] = (
                 mapping_ids[field["key"]] or unassigned_token
             )
     elif st.session_state[state_ids_key] != mapping_ids:
         st.session_state[state_ids_key] = mapping_ids.copy()
-        for field in UPLOAD_FIELD_DEFS:
+        for field in visible_fields:
             widget_key = f"{key}__select__{field['key']}"
             st.session_state[widget_key] = (
                 mapping_ids[field["key"]] or unassigned_token
@@ -297,7 +310,7 @@ def render_column_mapping_tool(
         st.caption("アップロードされた列がありません。")
 
     selected_ids: Dict[str, Optional[str]] = {}
-    for field in UPLOAD_FIELD_DEFS:
+    for field in visible_fields:
         widget_key = f"{key}__select__{field['key']}"
         desired_default = mapping_ids[field["key"]] or unassigned_token
         if widget_key not in st.session_state:
@@ -321,13 +334,13 @@ def render_column_mapping_tool(
     st.session_state[state_ids_key] = selected_ids.copy()
 
     resolved_mapping: Dict[str, Optional[str]] = {}
-    for field in UPLOAD_FIELD_DEFS:
+    for field in visible_fields:
         mapped_id = selected_ids.get(field["key"])
         resolved_mapping[field["key"]] = id_to_column.get(mapped_id)
 
     changed = any(
         resolved_mapping.get(field["key"]) != mapping.get(field["key"])
-        for field in UPLOAD_FIELD_DEFS
+        for field in visible_fields
     )
     return resolved_mapping if changed else None
 
@@ -386,15 +399,16 @@ def build_upload_template() -> bytes:
         readme.set_column("A:A", 60)
         readme.write(0, 0, "RollingUp データ取込テンプレート")
         readme.write(2, 0, "必要列")
-        readme.write(3, 0, "- 年月: YYYY-MM 形式（例: 2024-01）")
-        readme.write(4, 0, "- チャネル: 販売チャネル名（例: EC, 店舗）")
-        readme.write(5, 0, "- 商品名: 商品名称 / SKU 名")
-        readme.write(6, 0, "- 売上額: 金額（円）")
-        readme.write(8, 0, "任意列")
-        readme.write(9, 0, "- 商品コード: SKU コード。未設定の場合は自動で付番されます。")
-        readme.write(11, 0, "メモ")
-        readme.write(12, 0, "- 同一商品が複数チャネルに存在する場合はチャネル別に集計されます。")
-        readme.write(13, 0, "- 日次・週次データは年月で集計してからアップロードしてください。")
+        readme.write(3, 0, "- 商品名: 商品名称 / SKU 名")
+        readme.write(4, 0, "- 売上額: 金額（円）")
+        readme.write(6, 0, "自動検出される列")
+        readme.write(7, 0, "- 年月: YYYY-MM 形式（例: 2024-01）")
+        readme.write(8, 0, "- チャネル: 販売チャネル名（例: EC, 店舗）。未設定の場合は『全チャネル』として扱われます。")
+        readme.write(10, 0, "任意列")
+        readme.write(11, 0, "- 商品コード: SKU コード。未設定の場合は自動で付番されます。")
+        readme.write(13, 0, "メモ")
+        readme.write(14, 0, "- 同一商品が複数チャネルに存在する場合はチャネル別に集計されます。")
+        readme.write(15, 0, "- 日次・週次データは年月で集計してからアップロードしてください。")
 
     buffer.seek(0)
     return buffer.getvalue()
@@ -2550,18 +2564,16 @@ if page == "データ取込":
             <div class="upload-guide">
               <h4>📋 必要列</h4>
               <ul>
-                <li><strong>年月</strong>: YYYY-MM 形式（例: 2024-01）</li>
-                <li><strong>チャネル</strong>: EC / 店舗などの販売チャネル</li>
                 <li><strong>商品名</strong>: SKU やサービス名称</li>
                 <li><strong>売上額</strong>: 金額（円・税区分は任意）</li>
               </ul>
               <h4>🔍 推奨フォーマット</h4>
               <ul>
-                <li>年月は <code>YYYY-MM</code> もしくは日付形式で指定してください。</li>
-                <li>チャネルと商品名はテキスト列で入力してください。</li>
+                <li>年月列が含まれている場合は <code>YYYY-MM</code> または日付形式でご用意ください（自動検出されます）。</li>
+                <li>チャネル列が含まれている場合はテキスト列で入力してください（未設定の場合は「全チャネル」として取り込まれます）。</li>
                 <li>売上額は数値列で、マイナス値（返品）にも対応しています。</li>
               </ul>
-              <p class="upload-guide__note">※ 同一商品が複数チャネルに存在する場合はチャネル別に集計します。</p>
+              <p class="upload-guide__note">※ 年月・チャネル列はファイル内から自動検出されるため、割当操作は不要です。</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -2644,15 +2656,17 @@ if page == "データ取込":
             if st.button("推奨マッピングにリセット"):
                 st.session_state.upload_mapping = dict(suggestions)
 
-        current_mapping = {
+        current_mapping_visible = {
             field["key"]: st.session_state.upload_mapping.get(field["key"])
-            for field in UPLOAD_FIELD_DEFS
+            for field in UPLOAD_VISIBLE_FIELD_DEFS
         }
         mapping_update = render_column_mapping_tool(
-            df_raw.columns.tolist(), current_mapping, key="upload_mapping_tool"
+            df_raw.columns.tolist(),
+            current_mapping_visible,
+            key="upload_mapping_tool",
         )
         if mapping_update is not None:
-            st.session_state.upload_mapping = mapping_update
+            st.session_state.upload_mapping.update(mapping_update)
 
         column_mapping = {
             field["key"]: st.session_state.upload_mapping.get(field["key"])
@@ -2661,7 +2675,7 @@ if page == "データ取込":
 
         summary_rows = []
         missing_required = []
-        for field in UPLOAD_FIELD_DEFS:
+        for field in UPLOAD_VISIBLE_FIELD_DEFS:
             mapped_col = column_mapping.get(field["key"])
             if mapped_col:
                 display_value = str(mapped_col)
@@ -2675,7 +2689,19 @@ if page == "データ取込":
         if missing_required:
             st.warning("未割当の必須項目があります: " + ", ".join(missing_required))
 
-        convert_disabled = bool(missing_required)
+        hidden_required_missing = [
+            field["label"]
+            for field in UPLOAD_HIDDEN_FIELD_DEFS
+            if field["required"] and not column_mapping.get(field["key"])
+        ]
+        if hidden_required_missing:
+            st.error(
+                "必要な列が自動検出できませんでした: "
+                + ", ".join(hidden_required_missing)
+                + "。ファイル内に該当列が含まれているかご確認ください。"
+            )
+
+        convert_disabled = bool(missing_required or hidden_required_missing)
         convert_help = (
             "すべての必須項目を割り当ててください。"
             if convert_disabled
