@@ -5,7 +5,7 @@ import math
 import re
 import textwrap
 from datetime import datetime
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict, Set, Any
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -1624,6 +1624,26 @@ def download_pdf_overview(kpi: dict, top_df: pd.DataFrame, filename: str) -> byt
     return buffer.getvalue()
 
 
+def format_percent(
+    val: Optional[float], *, decimals: int = 1, signed: bool = True
+) -> str:
+    """Format a ratio (0-1) as a percentage string."""
+
+    if val is None:
+        return "—"
+    try:
+        if pd.isna(val):
+            return "—"
+    except TypeError:
+        pass
+
+    pct = float(val) * 100.0
+    formatted = f"{pct:.{decimals}f} %"
+    if signed and pct > 0:
+        formatted = "+" + formatted
+    return formatted
+
+
 def format_amount(val: Optional[float], unit: str) -> str:
     """Format a numeric value according to currency unit."""
     if val is None or (isinstance(val, float) and math.isnan(val)):
@@ -1632,12 +1652,198 @@ def format_amount(val: Optional[float], unit: str) -> str:
     return f"{format_int(val / scale)} {unit}".strip()
 
 
+def format_amount_delta(val: Optional[float], unit: str) -> str:
+    """Format a numeric delta with explicit sign."""
+
+    if val is None:
+        return "—"
+    try:
+        if pd.isna(val):
+            return "—"
+    except TypeError:
+        pass
+
+    scale = UNIT_MAP.get(unit, 1)
+    scaled = float(val) / scale
+    sign = "+" if scaled > 0 else ""
+    return f"{sign}{format_int(scaled)} {unit}".strip()
+
+
 def format_int(val: float | int) -> str:
     """Format a number with commas and no decimal part."""
     try:
         return f"{int(round(val)):,}"
     except (TypeError, ValueError):
         return "0"
+
+
+def infer_channel_label(name: Optional[str]) -> str:
+    """Infer channel label from product name that may contain a delimiter."""
+
+    if not isinstance(name, str):
+        return "全チャネル"
+    text = name.strip()
+    if "｜" in text:
+        candidate = text.rsplit("｜", 1)[-1].strip()
+        if candidate:
+            return candidate
+    return "全チャネル"
+
+
+def _build_kpi_card_css(theme: str) -> str:
+    if theme == "dark":
+        card_bg = "rgba(17, 24, 38, 0.92)"
+        border = "rgba(113, 183, 212, 0.35)"
+        shadow = "0 12px 24px rgba(3, 14, 26, 0.55)"
+        shadow_hover = "0 18px 32px rgba(3, 14, 26, 0.65)"
+        label_color = "#BBD2E8"
+        value_color = "#E9F1FF"
+        caption_color = "#8FA5C2"
+    else:
+        card_bg = "rgba(255, 255, 255, 0.95)"
+        border = "rgba(18, 58, 95, 0.18)"
+        shadow = "0 6px 16px rgba(18, 58, 95, 0.08)"
+        shadow_hover = "0 12px 22px rgba(18, 58, 95, 0.12)"
+        label_color = "#0F2C4C"
+        value_color = "#123a5f"
+        caption_color = "#4F627A"
+
+    return f"""
+    <style>
+      .kpi-card-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin: 0.5rem 0 1.25rem;
+      }}
+      .kpi-card {{
+        position: relative;
+        padding: 0.9rem 1rem 0.85rem;
+        border-radius: 16px;
+        border: 1px solid {border};
+        background: {card_bg};
+        box-shadow: {shadow};
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }}
+      .kpi-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: {shadow_hover};
+      }}
+      .kpi-card__label {{
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: {label_color};
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }}
+      .kpi-card__icon {{
+        font-size: 1.15rem;
+      }}
+      .kpi-card__value {{
+        font-size: 1.6rem;
+        font-weight: 700;
+        color: {value_color};
+        margin-top: 0.35rem;
+        line-height: 1.2;
+        word-break: break-word;
+      }}
+      .kpi-card__caption {{
+        margin-top: 0.45rem;
+        font-size: 0.78rem;
+        color: {caption_color};
+        line-height: 1.45;
+        word-break: break-word;
+      }}
+      .kpi-card__delta {{
+        margin-top: 0.2rem;
+        font-size: 0.78rem;
+        font-weight: 600;
+      }}
+      .kpi-card__delta--positive {{ color: #1f7a53; }}
+      .kpi-card__delta--negative {{ color: #c84c44; }}
+      .kpi-card__delta--neutral {{ color: {caption_color}; }}
+      .kpi-card--positive {{ border-color: rgba(38, 137, 91, 0.45); box-shadow: 0 8px 18px rgba(38, 137, 91, 0.18); }}
+      .kpi-card--negative {{ border-color: rgba(200, 76, 68, 0.35); box-shadow: 0 8px 18px rgba(200, 76, 68, 0.18); }}
+    </style>
+    """
+
+
+def render_kpi_cards(cards: List[Dict[str, Any]]) -> None:
+    if not cards:
+        return
+
+    theme = st.session_state.get("ui_theme", "dark")
+    css_theme_key = "_kpi_cards_css_theme"
+    if st.session_state.get(css_theme_key) != theme:
+        st.session_state[css_theme_key] = theme
+        st.session_state["_kpi_cards_css_injected"] = False
+
+    if not st.session_state.get("_kpi_cards_css_injected", False):
+        st.markdown(_build_kpi_card_css(theme), unsafe_allow_html=True)
+        st.session_state["_kpi_cards_css_injected"] = True
+
+    blocks = ["<div class='kpi-card-grid'>"]
+    for card in cards:
+        sentiment = card.get("sentiment")
+        if sentiment not in {"positive", "negative", "neutral"}:
+            delta_val = card.get("delta")
+            sentiment = "neutral"
+            if isinstance(delta_val, (int, float, np.floating)) and not pd.isna(delta_val):
+                if delta_val > 0:
+                    sentiment = "positive"
+                elif delta_val < 0:
+                    sentiment = "negative"
+
+        icon = card.get("icon")
+        icon_html = (
+            f"<span class='kpi-card__icon'>{html.escape(str(icon))}</span>"
+            if icon
+            else ""
+        )
+        label = html.escape(str(card.get("label", "")))
+        value = card.get("value", "—")
+        value_html = html.escape(str(value))
+
+        caption = card.get("caption")
+        caption_html = ""
+        if caption:
+            caption_html = (
+                "<div class='kpi-card__caption'>"
+                + html.escape(str(caption)).replace("\n", "<br>")
+                + "</div>"
+            )
+
+        delta_text = card.get("delta_text")
+        delta_html = ""
+        if delta_text:
+            delta_class = f"kpi-card__delta--{sentiment}"
+            delta_html = (
+                f"<div class='kpi-card__delta {delta_class}'>"
+                + html.escape(str(delta_text))
+                + "</div>"
+            )
+
+        blocks.append(
+            """
+            <div class='kpi-card kpi-card--{sentiment}'>
+              <div class='kpi-card__label'>{icon_html}{label}</div>
+              <div class='kpi-card__value'>{value_html}</div>
+              {delta_html}
+              {caption_html}
+            </div>
+            """.format(
+                sentiment=sentiment,
+                icon_html=icon_html,
+                label=label,
+                value_html=value_html,
+                delta_html=delta_html,
+                caption_html=caption_html,
+            )
+        )
+
+    blocks.append("</div>")
+    st.markdown("\n".join(blocks), unsafe_allow_html=True)
 
 
 def nice_slider_step(max_value: int, target_steps: int = 40) -> int:
@@ -3061,16 +3267,10 @@ elif page == "ダッシュボード":
 
     end_m = sidebar_state.get("dashboard_end_month") or latest_month
 
-    # KPI
+    # KPIと基礎集計
     kpi = aggregate_overview(st.session_state.data_year, end_m)
     hhi = compute_hhi(st.session_state.data_year, end_m)
     unit = st.session_state.settings["currency_unit"]
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("年計総額", format_amount(kpi["total_year_sum"], unit))
-    c2.metric("年計YoY", f"{kpi['yoy']*100:.1f} %" if kpi["yoy"] is not None else "—")
-    c3.metric("前月差(Δ)", format_amount(kpi["delta"], unit))
-    c4.metric("HHI(集中度)", f"{hhi:.3f}")
 
     snap = (
         st.session_state.data_year[st.session_state.data_year["month"] == end_m]
@@ -3079,14 +3279,196 @@ elif page == "ダッシュボード":
         .sort_values("year_sum", ascending=False)
     )
 
-    totals = st.session_state.data_year.groupby("month", as_index=False)[
-        "year_sum"
-    ].sum()
+    totals = (
+        st.session_state.data_year.groupby("month", as_index=False)["year_sum"].sum()
+    )
+    totals = totals.sort_values("month").reset_index(drop=True)
+    totals["month_dt"] = pd.to_datetime(totals["month"], format="%Y-%m", errors="coerce")
     totals["year_sum_disp"] = totals["year_sum"] / UNIT_MAP[unit]
+    totals["delta"] = totals["year_sum"].diff()
+    yoy_vals: List[float] = []
+    total_values = totals["year_sum"].tolist()
+    for idx, val in enumerate(total_values):
+        prev_idx = idx - 12
+        yoy_val = np.nan
+        if prev_idx >= 0:
+            prev_val = total_values[prev_idx]
+            if pd.notna(prev_val) and prev_val != 0 and pd.notna(val):
+                yoy_val = (val - prev_val) / prev_val
+        yoy_vals.append(yoy_val)
+    totals["yoy_ratio"] = yoy_vals
+    totals_line_df = totals.dropna(subset=["year_sum_disp", "month_dt"]).copy()
+
+    monthly_totals = (
+        st.session_state.data_monthly.groupby("month", as_index=False)[
+            "sales_amount_jpy"
+        ].sum()
+        if st.session_state.data_monthly is not None
+        else pd.DataFrame(columns=["month", "sales_amount_jpy"])
+    )
+    if not monthly_totals.empty:
+        monthly_totals = monthly_totals.sort_values("month").reset_index(drop=True)
+        monthly_totals["month_dt"] = pd.to_datetime(
+            monthly_totals["month"], format="%Y-%m", errors="coerce"
+        )
+        monthly_totals["amount_disp"] = (
+            monthly_totals["sales_amount_jpy"] / UNIT_MAP[unit]
+        )
+
+    yoy_chart_df = totals.dropna(subset=["yoy_ratio", "month_dt"]).copy()
+    if not yoy_chart_df.empty:
+        yoy_chart_df["yoy_pct"] = yoy_chart_df["yoy_ratio"] * 100
+        yoy_chart_df["trend"] = np.where(
+            yoy_chart_df["yoy_pct"] >= 0, "増加", "減少"
+        )
+
+    channel_totals = pd.DataFrame(columns=["channel", "year_sum", "share"])
+    total_channel_amount = 0.0
+    if not snap.empty:
+        channel_totals = (
+            snap.assign(channel=snap["product_name"].apply(infer_channel_label))
+            .groupby("channel", as_index=False)["year_sum"].sum()
+            .sort_values("year_sum", ascending=False)
+        )
+        total_channel_amount = float(channel_totals["year_sum"].sum())
+        if total_channel_amount > 0:
+            channel_totals["share"] = (
+                channel_totals["year_sum"] / total_channel_amount
+            )
+        else:
+            channel_totals["share"] = np.nan
+
+    channel_chart_df = channel_totals.copy()
+    if not channel_chart_df.empty:
+        if len(channel_chart_df) > 6:
+            top_channels = channel_chart_df.head(5)
+            others_sum = channel_chart_df.iloc[5:]["year_sum"].sum()
+            others_share = (
+                others_sum / total_channel_amount if total_channel_amount > 0 else np.nan
+            )
+            channel_chart_df = pd.concat(
+                [
+                    top_channels,
+                    pd.DataFrame(
+                        {
+                            "channel": ["その他"],
+                            "year_sum": [others_sum],
+                            "share": [others_share],
+                        }
+                    ),
+                ],
+                ignore_index=True,
+            )
+        if total_channel_amount > 0:
+            channel_chart_df["share"] = (
+                channel_chart_df["year_sum"] / total_channel_amount
+            )
+
+    top_channel_label = "—"
+    top_channel_caption = "データ不足"
+    if not channel_totals.empty:
+        top_channel_row = channel_totals.iloc[0]
+        top_channel_label = str(top_channel_row.get("channel", "—"))
+        channel_caption_parts: List[str] = []
+        amount_txt = format_amount(top_channel_row.get("year_sum"), unit)
+        if amount_txt != "—":
+            channel_caption_parts.append(f"売上 {amount_txt}")
+        share_txt = (
+            format_percent(top_channel_row.get("share"), decimals=1, signed=False)
+            if total_channel_amount > 0
+            else "—"
+        )
+        if share_txt != "—":
+            channel_caption_parts.append(f"シェア {share_txt}")
+        if channel_caption_parts:
+            top_channel_caption = "\n".join(channel_caption_parts)
+        else:
+            top_channel_caption = "—"
+
+    top_sku_label = "—"
+    top_sku_caption = "データ不足"
+    top_sku_delta = None
+    if not snap.empty:
+        top_row = snap.iloc[0]
+        top_sku_label = str(
+            top_row.get("product_name")
+            or top_row.get("product_code")
+            or "—"
+        )
+        sku_caption_parts: List[str] = []
+        amount_txt = format_amount(top_row.get("year_sum"), unit)
+        if amount_txt != "—":
+            sku_caption_parts.append(f"売上 {amount_txt}")
+        yoy_val = top_row.get("yoy")
+        yoy_txt = format_percent(yoy_val) if yoy_val is not None else "—"
+        if yoy_txt != "—":
+            sku_caption_parts.append(f"YoY {yoy_txt}")
+        delta_txt = format_amount_delta(top_row.get("delta"), unit)
+        if delta_txt != "—":
+            sku_caption_parts.append(f"Δ {delta_txt}")
+        if sku_caption_parts:
+            top_sku_caption = "\n".join(sku_caption_parts)
+        else:
+            top_sku_caption = "—"
+        if yoy_val is not None and not pd.isna(yoy_val):
+            top_sku_delta = float(yoy_val)
+
+    yoy_value = kpi.get("yoy") if kpi else None
+    delta_value = kpi.get("delta") if kpi else None
+    total_value_text = format_amount(kpi.get("total_year_sum"), unit)
+    yoy_text = format_percent(yoy_value) if yoy_value is not None else "—"
+    delta_text = format_amount_delta(delta_value, unit)
+    hhi_display = "—"
+    if hhi is not None and not pd.isna(hhi):
+        hhi_display = f"{hhi:.3f}"
+
+    kpi_cards = [
+        {
+            "label": "年間売上",
+            "value": total_value_text,
+            "caption": f"{end_m} 時点 12ヶ月移動累計",
+            "icon": "💰",
+        },
+        {
+            "label": "前年同期比",
+            "value": yoy_text,
+            "caption": "年計ベース YoY",
+            "icon": "📊",
+            "delta": yoy_value,
+        },
+        {
+            "label": "前月差",
+            "value": delta_text,
+            "caption": "年計の前月差分",
+            "icon": "↕",
+            "delta": delta_value,
+        },
+        {
+            "label": "トップチャネル",
+            "value": top_channel_label,
+            "caption": top_channel_caption,
+            "icon": "🏬",
+        },
+        {
+            "label": "トップSKU",
+            "value": top_sku_label,
+            "caption": top_sku_caption,
+            "icon": "🥇",
+            "delta": top_sku_delta,
+        },
+        {
+            "label": "HHI(集中度)",
+            "value": hhi_display,
+            "caption": "1に近いほど集中",
+            "icon": "🧮",
+        },
+    ]
 
     tab_highlight, tab_ranking = st.tabs(["ハイライト", "ランキング / エクスポート"])
 
     with tab_highlight:
+        render_kpi_cards(kpi_cards)
+
         ai_on = st.toggle(
             "AIサマリー",
             value=False,
@@ -3118,14 +3500,91 @@ elif page == "ダッシュボード":
                     st.success(f"**AI推奨アクション**：{actions}")
                     st.caption(_ai_comment("直近の年計トレンドと上位SKUの動向"))
 
-        fig = px.line(
-            totals, x="month", y="year_sum_disp", title="総合 年計トレンド", markers=True
-        )
-        fig.update_yaxes(title=f"年計({unit})", tickformat="~,d")
-        fig.update_layout(height=525, margin=dict(l=10, r=10, t=50, b=10))
-        fig = apply_elegant_theme(fig, theme=st.session_state.get("ui_theme", "dark"))
-        render_plotly_with_spinner(fig, config=PLOTLY_CONFIG)
-        st.caption("凡例クリックで系列の表示切替、ダブルクリックで単独表示。")
+        st.markdown("#### KPIトレンド")
+        trend_left, trend_right = st.columns(2)
+        with trend_left:
+            if totals_line_df.empty:
+                st.info("12ヶ月移動累計を算出するのに十分なデータがありません。")
+            else:
+                fig_trend = px.line(
+                    totals_line_df,
+                    x="month_dt",
+                    y="year_sum_disp",
+                    title="12ヶ月移動累計",
+                    markers=True,
+                )
+                fig_trend.update_yaxes(title=f"年計({unit})", tickformat="~,d")
+                fig_trend.update_xaxes(title="月", tickformat="%Y-%m")
+                fig_trend.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+                fig_trend = apply_elegant_theme(
+                    fig_trend, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_trend, config=PLOTLY_CONFIG)
+                st.caption("凡例クリックで系列の表示切替、ダブルクリックで単独表示。")
+        with trend_right:
+            monthly_plot = monthly_totals.dropna(subset=["month_dt"]).copy()
+            if monthly_plot.empty:
+                st.info("月次推移を表示するには十分なデータがありません。")
+            else:
+                fig_monthly = px.bar(
+                    monthly_plot,
+                    x="month_dt",
+                    y="amount_disp",
+                    title="月次売上推移",
+                )
+                fig_monthly.update_yaxes(title=f"月次売上({unit})", tickformat="~,d")
+                fig_monthly.update_xaxes(title="月")
+                fig_monthly.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+                fig_monthly = apply_elegant_theme(
+                    fig_monthly, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_monthly, config=PLOTLY_CONFIG)
+
+        st.markdown("#### 成長率とチャネル構成")
+        growth_left, growth_right = st.columns(2)
+        with growth_left:
+            yoy_plot = yoy_chart_df.dropna(subset=["month_dt"]).copy()
+            if yoy_plot.empty:
+                st.info("前年同期比を算出できる期間が不足しています。")
+            else:
+                fig_yoy = px.bar(
+                    yoy_plot,
+                    x="month_dt",
+                    y="yoy_pct",
+                    color="trend",
+                    color_discrete_map={"増加": "#2d6f8e", "減少": "#c84c44"},
+                    title="前年同期比の推移",
+                )
+                fig_yoy.update_yaxes(title="YoY(%)", tickformat=".1f")
+                fig_yoy.update_xaxes(title="月")
+                fig_yoy.add_hline(y=0, line_dash="dash", line_color="#888", opacity=0.5)
+                fig_yoy.update_layout(
+                    showlegend=False, height=340, margin=dict(l=10, r=10, t=45, b=10)
+                )
+                fig_yoy = apply_elegant_theme(
+                    fig_yoy, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_yoy, config=PLOTLY_CONFIG)
+        with growth_right:
+            channel_plot = channel_chart_df.copy()
+            if channel_plot.empty or channel_plot["year_sum"].sum() <= 0:
+                st.info("チャネル別の売上構成を算出できません。")
+            else:
+                fig_channel = px.pie(
+                    channel_plot,
+                    values="year_sum",
+                    names="channel",
+                    title="チャネル別年計比率",
+                    hole=0.45,
+                )
+                fig_channel.update_traces(
+                    textposition="inside", texttemplate="%{label}<br>%{percent:.1%}"
+                )
+                fig_channel.update_layout(height=340, margin=dict(l=10, r=10, t=45, b=10))
+                fig_channel = apply_elegant_theme(
+                    fig_channel, theme=st.session_state.get("ui_theme", "dark")
+                )
+                render_plotly_with_spinner(fig_channel, config=PLOTLY_CONFIG)
 
     with tab_ranking:
         st.markdown(f"#### ランキング（{end_m} 時点 年計）")
